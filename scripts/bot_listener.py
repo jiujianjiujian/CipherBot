@@ -119,6 +119,8 @@ def get_status_text() -> str:
         f"/status — 系统状态\n"
         f"/scan — 手动扫描\n"
         f"/analysis — 最新分析\n"
+        f"/positions — 查看当前持仓\n"
+        f"/orders — 查看当前挂单\n"
         f"/help — 帮助"
     )
 
@@ -146,6 +148,8 @@ def get_help_text() -> str:
         f"`/status` — 系统运行状态和最近扫描记录\n"
         f"`/scan` — 立即执行一次超短线扫描分析\n"
         f"`/analysis` — 获取最新行情简报\n"
+        f"`/positions` — 查看币安合约当前持仓和权益\n"
+        f"`/orders` — 查看当前挂单\n"
         f"`/help` — 显示此帮助\n\n"
         f"⚠️ 自动交易信号会主动推送到此聊天，无需手动查询"
     )
@@ -237,6 +241,26 @@ def process_update(update: dict):
         reply(chat_id, get_scan_text())
     elif text == "/analysis" or text == "analysis":
         reply(chat_id, get_analysis_text())
+    elif text in ("/positions", "/position", "positions", "仓位"):
+        try:
+            from config import BINANCE
+            from binance_account import format_positions
+            if BINANCE.get("api_key"):
+                reply(chat_id, format_positions(BINANCE["api_key"], BINANCE["api_secret"]))
+            else:
+                reply(chat_id, "❌ 尚未配置币安 API Key\n\n请在币安后台创建只读 API Key（无需提现权限），然后告诉我，我帮你配置。")
+        except Exception as e:
+            reply(chat_id, f"❌ 查询失败: {e}")
+    elif text in ("/orders", "/order", "orders", "挂单"):
+        try:
+            from config import BINANCE
+            from binance_account import format_orders
+            if BINANCE.get("api_key"):
+                reply(chat_id, format_orders(BINANCE["api_key"], BINANCE["api_secret"]))
+            else:
+                reply(chat_id, "❌ 尚未配置币安 API Key")
+        except Exception as e:
+            reply(chat_id, f"❌ 查询失败: {e}")
     elif text == "/help" or text == "help" or text == "/start":
         reply(chat_id, get_help_text())
     elif text.startswith("/"):
