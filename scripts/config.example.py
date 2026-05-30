@@ -20,6 +20,8 @@ TRADING = {
     "max_leverage": 25,
     "amount_percent": 25,
     "order_type": "limit",
+    "trailing_stop": False,
+    "partial_exit_50pct": False,
 }
 ANALYSIS = {
     "short_term_candles": 30,
