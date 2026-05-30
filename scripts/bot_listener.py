@@ -94,7 +94,8 @@ def cmd_status():
         with open("/proc/uptime") as f:
             s = float(f.read().split()[0])
             uptime = f"{int(s//3600)}h{int((s%3600)//60)}m"
-    except: pass
+    except Exception as _:
+        logger.warning(f"读取失败: {_}")
 
     # 账户权益
     account_info = ""
@@ -239,7 +240,8 @@ def main():
     if os.path.exists(offset_file):
         try:
             LAST_UPDATE_ID = int(open(offset_file).read().strip())
-        except: pass
+        except Exception as _:
+            logger.warning(f"读取失败: {_}")
 
     logger.info("🚀 CipherBot 命令监听器已启动 (进程PID: %d)", os.getpid())
     logger.info(f"Bot: @LobsterSignalBot")

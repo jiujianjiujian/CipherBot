@@ -15,7 +15,11 @@ logger = logging.getLogger("Cipher")
 FAPI = "https://fapi.binance.com"
 
 def _sign(query_string: str, secret: str) -> str:
-    return hmac.new(secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(
+        secret.encode('utf-8'),
+        query_string.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
 
 def _request(method: str, path: str, params: dict = None, api_key: str = "", secret: str = "") -> Optional[dict]:
     if not api_key or not secret:
