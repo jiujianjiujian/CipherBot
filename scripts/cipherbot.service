@@ -1,0 +1,16 @@
+[Unit]
+Description=CipherBot Telegram Command Listener
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/CipherBot
+ExecStart=/usr/bin/python3 /root/CipherBot/scripts/bot_listener.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/CipherBot/logs/bot_listener.log
+StandardError=append:/root/CipherBot/logs/bot_listener.log
+
+[Install]
+WantedBy=multi-user.target
