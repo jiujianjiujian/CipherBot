@@ -1,0 +1,2 @@
+# CipherBot 依赖（Python 标准库即可，无需额外安装）
+# 仅使用 urllib、json、logging、math 等 Python 内置库
