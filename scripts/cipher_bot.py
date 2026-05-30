@@ -414,9 +414,27 @@ def find_trading_signal(price: float, ticker_24h: dict,
     if candidates:
         candidates.sort(key=lambda s: s["score"] * s["rr"], reverse=True)
         best = candidates[0]
-        logger.info(f"候选:{len(candidates)} 最佳:{best['direction']} 评分{best['score']}/10 R/R={best['rr']}")
+        # 动态仓位
+        best["amount_pct"] = calc_position_size(best["score"], atr_1h)
+        logger.info(f"候选:{len(candidates)} 最佳:{best['direction']} 评分{best['score']}/10 R/R={best['rr']} 仓位:{best['amount_pct']}%")
         return best
     return None
+
+def calc_position_size(score: int, atr: float) -> int:
+    """根据信号评分和市场波动率动态计算仓位百分比"""
+    # 波动率调整
+    if atr > 900: vol_factor = 0.4    # 极高波动 → 40%仓位
+    elif atr > 600: vol_factor = 0.6  # 高波动 → 60%
+    elif atr > 400: vol_factor = 0.8  # 中波动 → 80%
+    else: vol_factor = 1.0             # 低波动 → 100%
+
+    # 评分调整
+    if score >= 9: score_factor = 1.0
+    elif score >= 7: score_factor = 0.8
+    else: score_factor = 0.6
+
+    base = TRADING["amount_percent"]  # 默认25%
+    return max(10, min(30, int(base * vol_factor * score_factor)))
 
 # ============================================================
 # Telegram — 改进：chat_id 持久化到文件
@@ -480,13 +498,16 @@ def send_webhook(signal: dict) -> bool:
         }
     }
 
+    amount_pct = signal.get("amount_pct", TRADING["amount_percent"])
+    payload["order"]["amount"] = str(amount_pct)
+
     result = api_post_with_retry(THREE_COMMAS["webhook_url"], payload, WEBHOOK_RETRIES)
     if result:
-        logger.info(f"✅ Webhook: {action} @ ${signal['entry']:.0f}")
+        logger.info(f"✅ Webhook: {action} @ ${signal['entry']:.0f} 仓位:{amount_pct}%")
         return True
 
     logger.error(f"❌ Webhook 失败({WEBHOOK_RETRIES}次)")
-    send_telegram(f"⚠️ *Webhook 发送失败*\n信号已出但3Commas未收到\n方向：{action} @ ${signal['entry']:.0f}\n请手动处理！")
+    send_telegram(f"⚠️ *Webhook 发送失败*\n信号已出但3Commas未收到\n方向：{action} @ ${signal['entry']:.0f} 仓位:{amount_pct}%\n请手动处理！")
     return False
 
 def format_signal(signal: dict) -> str:
@@ -494,6 +515,7 @@ def format_signal(signal: dict) -> str:
     dir_cn = "做多" if signal["direction"] == "long" else "做空"
     reasons_str = "\n".join(f"  ✅ {r}" for r in signal.get("reasons", []))
     risks_str = "\n".join(f"  ⚠️ {r}" for r in signal.get("risks", [])) if signal.get("risks") else "  无明显风险"
+    amt = signal.get("amount_pct", TRADING["amount_percent"])
     return (
         f"📊 *BTC超短线信号*\n"
         f"方向：{dir_cn} {emoji}\n"
@@ -503,7 +525,7 @@ def format_signal(signal: dict) -> str:
         f"目标参考：${signal['target']:.0f}（{signal['target_pct']:.2f}%）\n"
         f"预计盈亏比：{signal['rr']}:1\n"
         f"信号评分：{signal['score']}/10\n"
-        f"杠杆：25x | 形态：{signal['pattern']}\n\n"
+        f"杠杆：25x | 仓位：{amt}% | 形态：{signal['pattern']}\n\n"
         f"*评分理由：*\n{reasons_str}\n\n"
         f"*风险提示：*\n{risks_str}\n\n"
         f"⚠️ DYOR，杠杆风险自行承担"
