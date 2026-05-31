@@ -27,6 +27,7 @@ cat >> /tmp/cipher_cron << 'CRON'
 */30 0-6 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py scan >> logs/cron_scan.log 2>&1
 0 */4 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py summary >> logs/cron_summary.log 2>&1
 */15 * * * * cd /root/CipherBot && python3 scripts/trailing_manager.py >> logs/cron_trailing.log 2>&1
+*/15 * * * * cd /root/CipherBot && python3 scripts/trailing_manager.py check_add >> logs/cron_add.log 2>&1
 0 23 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py review >> logs/cron_review.log 2>&1
 CRON
 crontab /tmp/cipher_cron 2>/dev/null; crontab -l 2>/dev/null | cat - /tmp/cipher_cron | crontab -
