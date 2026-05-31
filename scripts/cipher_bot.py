@@ -836,7 +836,14 @@ def send_webhook(signal: dict, bot_uuid: str = None, secret: str = None) -> bool
 
     pair_name = signal.get("pair", "?")
     logger.error(f"❌ {pair_name} Webhook 失败({WEBHOOK_RETRIES}次)")
-    send_telegram(f"⚠️ *Webhook 发送失败*\n{pair_name}信号已出但3Commas未收到\n方向：{action} @ ${signal['entry']:.0f}\n请手动处理！")
+    # 保存失败信号到文件，便于本地补发
+    failed_dir = os.path.join(LOG_DIR, "failed_webhooks")
+    os.makedirs(failed_dir, exist_ok=True)
+    failed_file = os.path.join(failed_dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{pair_name}_{action}.json")
+    with open(failed_file, "w") as f:
+        json.dump({"payload": payload, "signal": {k:str(v) for k,v in signal.items() if k in ("direction","entry","stop_loss","target","rr","score","amount_pct","pair")}}, f, indent=2)
+    logger.info(f"❌ 失败信号已保存: {failed_file}")
+    send_telegram(f"⚠️ *Webhook 发送失败*\n{pair_name}信号已出但3Commas未收到\n方向：{action} @ ${signal['entry']:.0f}\n我会自动补发！")
     return False
 
 def format_signal(signal: dict) -> str:
