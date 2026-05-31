@@ -51,6 +51,8 @@ API_TIMEOUT_SLOW = 15    # Telegram/Webhook（15秒）
 WEBHOOK_RETRIES = 3      # Webhook 重试次数
 CANDLE_CLOSE_BUFFER = 120  # K线收盘前120秒不下单（2分钟）
 MAX_TRADE_LOG_SIZE = 10 * 1024 * 1024  # 日志10MB轮转
+LAST_SIGNAL_FILE = os.path.join(LOG_DIR, "last_signal.json")
+SIGNAL_COOLDOWN_SEC = 1800  # 同币种同向信号冷却30分钟
 
 # v4 新增常量（从配置读取，避免双源）
 MIN_SCORE_STRONG = TRADING.get("score_strong", 80)
@@ -629,7 +631,9 @@ def find_trading_signal(price: float, ticker_24h: dict,
     if near_support and position_pct < 40:
         stop_loss = support_level - base_stop_atr * 0.5
         stop_pct = (price - stop_loss) / price * 100 if price > stop_loss else 0.5
-        stop_pct = max(stop_pct, 0.3)
+        # 最小止损防止秒打：按max_stop(1.2%→0.5%, 1.5%→0.6%）
+        min_stop = round(0.4 * max_stop_pct, 2)
+        stop_pct = max(stop_pct, min_stop)
 
         target = min(ema21_4h if price < ema21_4h else high_24h, high_24h)
         target = max(target, price * 1.008)
@@ -671,7 +675,8 @@ def find_trading_signal(price: float, ticker_24h: dict,
     if near_resistance and position_pct > 60:
         stop_loss = resistance_level + base_stop_atr * 0.5
         stop_pct = (stop_loss - price) / price * 100 if stop_loss > price else 0.5
-        stop_pct = max(stop_pct, 0.3)
+        min_stop = round(0.4 * max_stop_pct, 2)
+        stop_pct = max(stop_pct, min_stop)
 
         target = max(ema21_4h if price > ema21_4h else low_24h, low_24h)
         target = min(target, price * 0.992)
@@ -984,6 +989,20 @@ def run_scan():
             if score < min_score:
                 logger.info(f"  ⏸️ 信号评分{score}<{min_score}({pair_name}最低要求)，跳过")
                 continue
+
+            # 信号去重：同币种同方向30分钟内不重复发
+            last_sig = {}
+            if os.path.exists(LAST_SIGNAL_FILE):
+                try:
+                    with open(LAST_SIGNAL_FILE) as f:
+                        last_sig = json.load(f)
+                except: pass
+            if last_sig.get("pair") == pair_name and last_sig.get("direction") == signal["direction"]:
+                price_diff = abs(last_sig.get("entry", 0) - price) / price * 100
+                time_diff = datetime.now(timezone.utc).timestamp() - last_sig.get("ts", 0)
+                if price_diff < 0.3 and time_diff < SIGNAL_COOLDOWN_SEC:
+                    logger.info(f"  ⏸️ 去重: 同{pair_name}同方向价差{price_diff:.2f}% 距上次{int(time_diff//60)}分，跳过")
+                    continue
             logger.info(f"  ✅ 信号! {signal['direction']} 评分{score}/100 R/R={signal['rr']}")
 
             # 给信号打上pair标记
@@ -1022,6 +1041,12 @@ def run_scan():
             signal["leverage"] = lev
 
             log_trade(signal, "sent")
+            # 记录最后信号用于去重
+            try:
+                with open(LAST_SIGNAL_FILE, "w") as f:
+                    json.dump({"pair": pair_name, "direction": signal["direction"],
+                               "entry": price, "ts": datetime.now(timezone.utc).timestamp()}, f)
+            except: pass
             send_telegram(format_signal(signal))
             # 发送 Cornix 信号到频道（自动执行）
             send_cornix(signal)
