@@ -768,6 +768,35 @@ def save_chat_id(chat_id: int):
         f.write(str(chat_id))
     logger.info(f"chat_id {chat_id} 已持久化")
 
+def send_cornix(signal: dict) -> bool:
+    """发送 Cornix 格式信号到频道"""
+    channel = TELEGRAM.get("cornix_channel", "")
+    if not channel:
+        return False
+    direction = "LONG" if signal["direction"] == "long" else "SHORT"
+    symbol = signal.get("symbol", "BTCUSDT")
+    entry = signal.get("entry", 0)
+    stop = signal.get("stop_loss", 0)
+    target = signal.get("target", 0)
+    lev = signal.get("leverage", 25)
+    msg = (
+        f"{direction} ${symbol}\n"
+        f"Entry: {int(entry)}\n"
+        f"Take-Profit: {int(target)}\n"
+        f"Stop-Loss: {int(stop)}\n"
+        f"Leverage: {lev}x"
+    )
+    token = TELEGRAM["bot_token"]
+    result = api_post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        {"chat_id": channel, "text": msg}
+    )
+    if result:
+        logger.info(f"✅ Cornix信号已发送到频道: {direction} {symbol}")
+        return True
+    logger.warning("Cornix信号发送失败")
+    return False
+
 def send_telegram(message: str) -> bool:
     token = TELEGRAM["bot_token"]
     chat_id = TELEGRAM.get("chat_id") or get_chat_id()
@@ -994,6 +1023,8 @@ def run_scan():
 
             log_trade(signal, "sent")
             send_telegram(format_signal(signal))
+            # 发送 Cornix 信号到频道（自动执行）
+            send_cornix(signal)
             # 发送webhook（使用币种专属bot_uuid）
             send_webhook(signal, bot_uuid=pconf.get("bot_uuid"), secret=THREE_COMMAS.get("secret"))
             signals_found += 1
