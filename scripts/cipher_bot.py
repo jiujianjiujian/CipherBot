@@ -460,7 +460,9 @@ def score_signal(
     # ——— 维度3：成交量验证（20分）———
     vol_score = 5
     if len(vols_15m) >= 6:
-        avg_vol = sum(vols_15m[-6:-3]) / 3 if len(vols_15m) >= 6 else 0
+        # 改用20期均量做基准（中位数抗异常值）
+        baseline = sorted(vols_15m[-max(20, len(vols_15m)):-3])
+        avg_vol = baseline[len(baseline)//2] if baseline else 0
         recent_vol = sum(vols_15m[-3:]) / 3
         # 关键位放量
         if near_support or near_resistance:
@@ -794,12 +796,10 @@ def send_webhook(signal: dict, bot_uuid: str = None, secret: str = None) -> bool
         return False
 
     action = "enter_long" if signal["direction"] == "long" else "enter_short"
-    stop_pct = signal.get("stop_pct", 1.0)
-    target_pct = signal.get("target_pct", 2.0)
 
     payload = {
         "secret": secret,
-        "max_lag": "300",
+        "max_lag": "600",
         "timestamp": "{{timenow}}",
         "trigger_price": "{{close}}",
         "tv_exchange": "{{exchange}}",
@@ -807,16 +807,15 @@ def send_webhook(signal: dict, bot_uuid: str = None, secret: str = None) -> bool
         "action": action,
         "bot_uuid": bot_uuid,
         "order": {
-            "amount": "25",  # 会被下面 amount_pct 覆盖
+            "amount": "25",
             "currency_type": "margin_percent",
             "order_type": TRADING["order_type"],
             "price": str(int(signal["entry"])),
         },
     }
 
-    # 动态止损止盈（3Commas 收到后会去币安下对应的订单）
-    payload["stop_loss"] = str(round(stop_pct, 1))
-    payload["take_profit"] = str(round(target_pct, 1))
+    # 注意：3Commas Signal Bot 不支持通过 Webhook 动态设置止盈止损
+    # 止损止盈请在 3Commas Bot 面板上配置安全值兜底
 
     amount_pct = signal.get("amount_pct", 25)
     payload["order"]["amount"] = str(amount_pct)

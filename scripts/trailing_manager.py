@@ -50,9 +50,9 @@ def check_positions():
         logger.info(f"  {symbol} {side} | 入场${entry:.0f} 当前${mark:.0f} | 盈亏{pnl_pct:+.2f}% | ATR=${atr:.1f}")
 
         # 当盈亏超过一定比例时发送告警（不执行任何交易操作）
-        if pnl_pct > 3.0:
+        if pnl_pct > 5.0:
             alerts.append(f"⚠️ {symbol} {side} 浮盈+{pnl_pct:.1f}%")
-        elif pnl_pct < -1.0:
+        elif pnl_pct < -3.0:
             alerts.append(f"⚠️ {symbol} {side} 浮亏{pnl_pct:.1f}%")
 
     if alerts:
