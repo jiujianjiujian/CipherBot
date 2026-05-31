@@ -48,7 +48,6 @@ logger = logging.getLogger("Cipher")
 API_TIMEOUT_FAST = 5     # 价格查询（5秒）
 API_TIMEOUT_NORMAL = 10  # K线数据（10秒）
 API_TIMEOUT_SLOW = 15    # Telegram/Webhook（15秒）
-WEBHOOK_RETRIES = 3      # Webhook 重试次数
 CANDLE_CLOSE_BUFFER = 120  # K线收盘前120秒不下单（2分钟）
 MAX_TRADE_LOG_SIZE = 10 * 1024 * 1024  # 日志10MB轮转
 LAST_SIGNAL_FILE = os.path.join(LOG_DIR, "last_signal.json")
@@ -239,21 +238,6 @@ def api_post(url: str, data: dict, timeout: int = API_TIMEOUT_SLOW):
     except Exception as e:
         logger.debug(f"API POST 失败: {e}")
         return None
-
-def api_post_with_retry(url: str, data: dict, retries: int = WEBHOOK_RETRIES) -> Optional[dict]:
-    """带指数退避重试的 POST"""
-    last_error = None
-    for attempt in range(retries):
-        result = api_post(url, data)
-        if result:
-            return result
-        last_error = "POST 返回空"
-        if attempt < retries - 1:
-            wait = 2 ** attempt
-            logger.warning(f"POST 重试 {attempt+1}/{retries}，等待 {wait}s...")
-            time.sleep(wait)
-    logger.error(f"POST 失败 ({retries}次后放弃): {last_error}")
-    return None
 
 # ============================================================
 # Binance 数据
@@ -826,8 +810,6 @@ def send_telegram(message: str) -> bool:
             return True
         logger.warning("Telegram 发送失败")
     return False
-
-# 3Commas 已移除 — 所有交易走 Cornix 频道
 
 def format_signal(signal: dict) -> str:
     pair = signal.get("pair", "BTC")

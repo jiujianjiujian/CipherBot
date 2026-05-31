@@ -116,11 +116,6 @@ def check_config_keys():
     if "PAIRS" in dict_keys:
         print("  检查PAIRS配置...")
 
-    # 检查 3Commas webhook_url / secret
-    for key in ["webhook_url", "secret"]:
-        if key not in dict_keys.get("THREE_COMMAS", set()):
-            err(f"THREE_COMMAS[\"{key}\"] 缺失")
-    ok(f"THREE_COMMAS: 基础键完整")
 
 
 # ============================================================
@@ -154,7 +149,7 @@ def check_function_signatures():
     checks = [
         ("find_trading_signal", ["price", "ticker_24h", "klines_15m", "klines_1h", "klines_4h"]),
         ("score_signal", ["direction", "price", "stop_loss", "target", "klines_15m", "klines_1h", "structure"]),
-        ("send_webhook", ["signal"]),
+        ("send_cornix", ["signal"]),
         ("run_scan", []),
         ("run_summary", []),
         ("run_review", []),
@@ -253,7 +248,7 @@ def check_imports():
                 warn(f"第{lineno}行: 导入 '{name}' 可能未使用")
 
     # 检查 config.py 导入的变量
-    config_names = ['THREE_COMMAS', 'TELEGRAM', 'TRADING', 'PAIRS', 'SCORING', 'TRADE_LOG_FILE', 'ANALYSIS']
+    config_names = ['TELEGRAM', 'TRADING', 'PAIRS', 'SCORING', 'TRADE_LOG_FILE', 'ANALYSIS']
     for name in config_names:
         if name not in imported_names:
             err(f"缺少导入: {name}")

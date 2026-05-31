@@ -18,7 +18,7 @@ from typing import Optional, List, Dict, Tuple
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import THREE_COMMAS, TELEGRAM, TRADING, ANALYSIS, SCORING
+from config import TELEGRAM, TRADING, ANALYSIS, SCORING
 
 # 复用主程序的指标函数
 from cipher_bot import (
