@@ -24,7 +24,7 @@ from config import THREE_COMMAS, TELEGRAM, TRADING, ANALYSIS, SCORING
 from cipher_bot import (
     calc_rsi, calc_ema, calc_sma, calc_atr, calc_local_atr,
     detect_market_structure, score_signal, check_timeframe_alignment,
-    analyze_candles, calc_position_size, MIN_SCORE_DECENT, MIN_SCORE_GOOD, MIN_SCORE_STRONG,
+    analyze_candles, calc_position_size,
 )
 
 

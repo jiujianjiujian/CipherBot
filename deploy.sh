@@ -22,7 +22,9 @@ echo "[3/5] 设置定时任务..."
 crontab -l 2>/dev/null | grep -v "CipherBot\|cipher_bot\|trailing_manager" | crontab -
 cat >> /tmp/cipher_cron << 'CRON'
 # CipherBot v4 定时任务
-*/5 * * * * cd /root/CipherBot && python3 scripts/cipher_bot.py scan >> logs/cron_scan.log 2>&1
+# 日间(7:00-23:59) 5分钟扫描 / 夜间(0:00-6:59) 30分钟省资源
+*/5 7-23 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py scan >> logs/cron_scan.log 2>&1
+*/30 0-6 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py scan >> logs/cron_scan.log 2>&1
 0 */4 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py summary >> logs/cron_summary.log 2>&1
 */15 * * * * cd /root/CipherBot && python3 scripts/trailing_manager.py >> logs/cron_trailing.log 2>&1
 0 23 * * * cd /root/CipherBot && python3 scripts/cipher_bot.py review >> logs/cron_review.log 2>&1

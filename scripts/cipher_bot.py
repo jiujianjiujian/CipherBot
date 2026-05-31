@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Tuple
 from urllib.request import Request, urlopen
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import THREE_COMMAS, TELEGRAM, TRADING, ANALYSIS, SCORING, TRADE_LOG_FILE, PAIRS
@@ -49,6 +50,7 @@ API_TIMEOUT_NORMAL = 10  # K线数据（10秒）
 API_TIMEOUT_SLOW = 15    # Telegram/Webhook（15秒）
 WEBHOOK_RETRIES = 3      # Webhook 重试次数
 CANDLE_CLOSE_BUFFER = 120  # K线收盘前120秒不下单（2分钟）
+MAX_TRADE_LOG_SIZE = 10 * 1024 * 1024  # 日志10MB轮转
 
 # v4 新增常量（从配置读取，避免双源）
 MIN_SCORE_STRONG = TRADING.get("score_strong", 80)
@@ -56,6 +58,9 @@ MIN_SCORE_GOOD = TRADING.get("score_good", 60)
 MIN_SCORE_DECENT = TRADING.get("score_decent", 40)
 VOL_SURGE_STRONG = 2.0    # 强放量阈值
 VOL_SURGE_NORMAL = 1.5    # 正常放量阈值
+
+# 活跃币种列表（从配置读取）
+ACTIVE_PAIRS = [k for k, v in PAIRS.items() if v.get("enabled", False)]
 
 # ============================================================
 # 交易日志（v4）
@@ -84,6 +89,9 @@ def log_trade(signal: dict, status: str = "sent"):
     }
     try:
         os.makedirs(os.path.dirname(TRADE_LOG_FILE), exist_ok=True)
+        # 日志超10MB自动轮转
+        if os.path.exists(TRADE_LOG_FILE) and os.path.getsize(TRADE_LOG_FILE) > MAX_TRADE_LOG_SIZE:
+            os.rename(TRADE_LOG_FILE, TRADE_LOG_FILE + ".old")
         with open(TRADE_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         logger.info(f"交易日志已记录 [{record['id']}]")
@@ -885,32 +893,45 @@ def format_signal(signal: dict) -> str:
 # ============================================================
 # 主函数
 # ============================================================
+def fetch_pair(symbol: str, pconf: dict):
+    """并发获取单个币种数据"""
+    price = get_binance_price(symbol)
+    ticker = get_24h_ticker(symbol)
+    if not price or not ticker:
+        return symbol, pconf, None, None
+    k15 = get_klines(symbol, "15m", 30)
+    k1h = get_klines(symbol, "1h", 30)
+    k4h = get_klines(symbol, "4h", 24)
+    return symbol, pconf, (price, ticker, k15, k1h, k4h), None if all([k15, k1h, k4h]) else "K线数据失败"
+
 def run_scan():
     logger.info("=" * 50)
     logger.info("Cipher v4 多币种扫描")
 
     signals_found = 0
-    for symbol, pconf in PAIRS.items():
-        if not pconf.get("enabled", False):
-            continue
+    enabled_pairs = [(k, v) for k, v in PAIRS.items() if v.get("enabled", False)]
 
+    # 并发获取所有币种数据
+    with ThreadPoolExecutor(max_workers=min(len(enabled_pairs), 3)) as ex:
+        futures = {ex.submit(fetch_pair, sym, pc): sym for sym, pc in enabled_pairs}
+        results = {}
+        for future in as_completed(futures):
+            sym, pconf, data, err = future.result()
+            if err or not data:
+                logger.warning(f"{pconf.get('name', sym)}: {err or '数据获取失败'}")
+            results[sym] = (pconf, data)
+            if not err:
+                pair_name = pconf.get("name", sym)
+                price, ticker, k15, k1h, k4h = data
+                logger.info(f"  {pair_name} ${price:,.2f} | 24h ${ticker['low']:,.0f}-${ticker['high']:,.0f} {ticker['change_pct']:+.2f}%")
+
+    # 逐个币种分析信号
+    for symbol, pconf in enabled_pairs:
+        if symbol not in results or not results[symbol][1]:
+            continue
+        pconf, data = results[symbol]
         pair_name = pconf.get("name", symbol)
-        logger.info(f"--- {pair_name} ({symbol}) ---")
-
-        price = get_binance_price(symbol)
-        ticker = get_24h_ticker(symbol)
-        if not price or not ticker:
-            logger.warning(f"{pair_name}: 价格数据获取失败")
-            continue
-
-        logger.info(f"${price:,.2f} | 24h ${ticker['low']:,.0f}-${ticker['high']:,.0f} {ticker['change_pct']:+.2f}%")
-
-        k15 = get_klines(symbol, "15m", 30)
-        k1h = get_klines(symbol, "1h", 30)
-        k4h = get_klines(symbol, "4h", 24)
-        if not all([k15, k1h, k4h]):
-            logger.warning(f"{pair_name}: K线数据获取失败")
-            continue
+        price, ticker, k15, k1h, k4h = data
 
         pair_max_stop = pconf.get("max_stop_pct", 1.2)
         signal, indicators = find_trading_signal(price, ticker, k15, k1h, k4h,
