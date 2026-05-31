@@ -758,7 +758,7 @@ def save_chat_id(chat_id: int):
     logger.info(f"chat_id {chat_id} 已持久化")
 
 def send_cornix(signal: dict) -> bool:
-    """发送 Cornix 格式信号到频道"""
+    """发送极简 Cornix 信号到频道——只传方向/价格/止损止盈"""
     channel = TELEGRAM.get("cornix_channel", "")
     if not channel:
         return False
@@ -767,23 +767,18 @@ def send_cornix(signal: dict) -> bool:
     entry = signal.get("entry", 0)
     stop = signal.get("stop_loss", 0)
     target = signal.get("target", 0)
-    lev = signal.get("leverage", 25)
-    msg = (
-        f"{direction} ${symbol}\n"
-        f"Entry: {int(entry)}\n"
-        f"Take-Profit: {int(target)}\n"
-        f"Stop-Loss: {int(stop)}\n"
-        f"Leverage: {lev}x"
-    )
+    # 杠杆和仓位由用户自己在 Cornix 面板设，信号不传
+    msg = (f"{direction} ${symbol}\nEntry: {int(entry)}\n"
+           f"Take-Profit: {int(target)}\nStop-Loss: {int(stop)}")
     token = TELEGRAM["bot_token"]
     result = api_post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         {"chat_id": channel, "text": msg}
     )
     if result:
-        logger.info(f"✅ Cornix信号已发送到频道: {direction} {symbol}")
+        logger.info(f"✅ Cornix: {direction} {symbol} @ ${entry:.0f}")
         return True
-    logger.warning("Cornix信号发送失败")
+    logger.warning("Cornix发送失败")
     return False
 
 def send_telegram(message: str) -> bool:
