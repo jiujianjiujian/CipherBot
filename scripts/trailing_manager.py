@@ -17,7 +17,7 @@ import sys, os, json, logging
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import BINANCE, PAIRS
 from binance_account import get_account_info
-from cipher_bot import calc_atr, get_klines, calc_ema, detect_market_structure, logger, send_telegram, send_webhook, send_cornix, THREE_COMMAS
+from cipher_bot import calc_atr, get_klines, calc_ema, detect_market_structure, logger, send_telegram, send_cornix
 
 ADD_PCT = 15  # 加仓仓位(%)
 
@@ -106,7 +106,6 @@ def check_add():
                 f"加仓 {ADD_PCT}% | 追踪止损保护全部仓位"
             )
             send_cornix(sig)
-            send_webhook(sig, bot_uuid=pc.get("bot_uuid"), secret=THREE_COMMAS.get("secret"))
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv)>1 else "check"

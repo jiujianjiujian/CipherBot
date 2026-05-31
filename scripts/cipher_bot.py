@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import THREE_COMMAS, TELEGRAM, TRADING, ANALYSIS, SCORING, TRADE_LOG_FILE, PAIRS
+from config import TELEGRAM, TRADING, ANALYSIS, SCORING, TRADE_LOG_FILE, PAIRS
 from validator import validate_analysis
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -654,7 +654,7 @@ def find_trading_signal(price: float, ticker_24h: dict,
             if sig_score >= MIN_SCORE_DECENT:
                 candidates.append({
                     "direction": "long", "entry": price,
-                    "entry_range": f"${max(support_level, price-30):.0f} - ${price+30:.0f}",
+                    "entry_range": f"${max(support_level, price-10):.0f} - ${price+10:.0f}",
                     "stop_loss": round(stop_loss, 1),
                     "target": round(target, 1),
                     "stop_pct": round(stop_pct, 2),
@@ -696,7 +696,7 @@ def find_trading_signal(price: float, ticker_24h: dict,
             if sig_score >= MIN_SCORE_DECENT:
                 candidates.append({
                     "direction": "short", "entry": price,
-                    "entry_range": f"${price-30:.0f} - ${min(resistance_level, price+30):.0f}",
+                    "entry_range": f"${price-10:.0f} - ${price+10:.0f}",
                     "stop_loss": round(stop_loss, 1),
                     "target": round(target, 1),
                     "stop_pct": round(stop_pct, 2),
@@ -827,58 +827,7 @@ def send_telegram(message: str) -> bool:
         logger.warning("Telegram 发送失败")
     return False
 
-def send_webhook(signal: dict, bot_uuid: str = None, secret: str = None) -> bool:
-    """改进：失败自动重试3次 + Telegram 告警"""
-    secret = secret or THREE_COMMAS.get("secret", "")
-    if not bot_uuid:
-        logger.warning("Webhook未配置bot_uuid，跳过")
-        return False
-    if not secret:
-        logger.warning("Webhook未配置secret，跳过")
-        return False
-
-    action = "enter_long" if signal["direction"] == "long" else "enter_short"
-
-    payload = {
-        "secret": secret,
-        "max_lag": "600",
-        "timestamp": "{{timenow}}",
-        "trigger_price": "{{close}}",
-        "tv_exchange": "{{exchange}}",
-        "tv_instrument": "{{ticker}}",
-        "action": action,
-        "bot_uuid": bot_uuid,
-        "order": {
-            "amount": "25",
-            "currency_type": "margin_percent",
-            "order_type": TRADING["order_type"],
-            "price": str(int(signal["entry"])),
-        },
-    }
-
-    # 注意：3Commas Signal Bot 不支持通过 Webhook 动态设置止盈止损
-    # 止损止盈请在 3Commas Bot 面板上配置安全值兜底
-
-    amount_pct = signal.get("amount_pct", 25)
-    payload["order"]["amount"] = str(amount_pct)
-
-    result = api_post_with_retry(THREE_COMMAS["webhook_url"], payload, WEBHOOK_RETRIES)
-    if result:
-        pair_name = signal.get("pair", "?")
-        logger.info(f"✅ {pair_name} Webhook: {action} @ ${signal['entry']:.0f} 仓位:{amount_pct}%")
-        return True
-
-    pair_name = signal.get("pair", "?")
-    logger.error(f"❌ {pair_name} Webhook 失败({WEBHOOK_RETRIES}次)")
-    # 保存失败信号到文件，便于本地补发
-    failed_dir = os.path.join(LOG_DIR, "failed_webhooks")
-    os.makedirs(failed_dir, exist_ok=True)
-    failed_file = os.path.join(failed_dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{pair_name}_{action}.json")
-    with open(failed_file, "w") as f:
-        json.dump({"payload": payload, "signal": {k:str(v) for k,v in signal.items() if k in ("direction","entry","stop_loss","target","rr","score","amount_pct","pair")}}, f, indent=2)
-    logger.info(f"❌ 失败信号已保存: {failed_file}")
-    send_telegram(f"⚠️ *Webhook 发送失败*\n{pair_name}信号已出但3Commas未收到\n方向：{action} @ ${signal['entry']:.0f}\n我会自动补发！")
-    return False
+# 3Commas 已移除 — 所有交易走 Cornix 频道
 
 def format_signal(signal: dict) -> str:
     pair = signal.get("pair", "BTC")
@@ -1041,17 +990,13 @@ def run_scan():
             signal["leverage"] = lev
 
             log_trade(signal, "sent")
-            # 记录最后信号用于去重
             try:
                 with open(LAST_SIGNAL_FILE, "w") as f:
                     json.dump({"pair": pair_name, "direction": signal["direction"],
                                "entry": price, "ts": datetime.now(timezone.utc).timestamp()}, f)
             except: pass
             send_telegram(format_signal(signal))
-            # 发送 Cornix 信号到频道（自动执行）
-            send_cornix(signal)
-            # 发送webhook（使用币种专属bot_uuid）
-            send_webhook(signal, bot_uuid=pconf.get("bot_uuid"), secret=THREE_COMMAS.get("secret"))
+            send_cornix(signal)  # Cornix 自动执行
             signals_found += 1
 
     if signals_found == 0:
