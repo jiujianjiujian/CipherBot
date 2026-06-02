@@ -240,3 +240,32 @@ def route_strategy(regime_label: str, price: float, ticker: dict,
         if sig: candidates.append(sig)
 
     return candidates
+
+
+def breakout_retest_strategy(price, ticker, k15, k4h, vrvp, ofi_info, rsi_15m, rsi_1h, structure, label):
+    if not vrvp: return None
+    vah=vrvp.get("va_high",0); val=vrvp.get("va_low",0); poc=vrvp.get("poc",(vah+val)/2)
+    ofi=ofi_info.get("ofi",0) if ofi_info else 0
+    if price>vah*1.005 and abs(price-poc)/price*100<0.3 and ofi>0.1:
+        sp=max((price-(poc-(vah-poc)*0.3))/price*100,0.4)
+        return {"direction":"long","entry":price,"stop_loss":round(poc-(vah-poc)*0.3,1),"target":round(price+sp*2.5*price/100,1),"stop_pct":round(sp,2),"rr":2.5,"score":70,"leverage":12,"pattern":"突破回踩做多","reasons":["突破VAH回踩POC"],"risks":[],"key_level":round(poc,1),"strategy":"breakout_retest","fvg_info":{"in_fvg":False}}
+    if price<val*0.995 and abs(price-poc)/price*100<0.3 and ofi<-0.1:
+        sp=max(((poc+(poc-val)*0.3)-price)/price*100,0.4)
+        return {"direction":"short","entry":price,"stop_loss":round(poc+(poc-val)*0.3,1),"target":round(price-sp*2.5*price/100,1),"stop_pct":round(sp,2),"rr":2.5,"score":70,"leverage":12,"pattern":"突破回踩做空","reasons":["跌破VAL回踩POC"],"risks":[],"key_level":round(poc,1),"strategy":"breakout_retest","fvg_info":{"in_fvg":False}}
+    return None
+
+def fakeout_reversal_strategy(price, ticker, k15, vrvp, ofi_info, rsi_15m, label):
+    if not vrvp or not ofi_info or len(k15)<3: return None
+    vah=vrvp.get("va_high",0); val=vrvp.get("va_low",0)
+    ofi=ofi_info.get("ofi",0); ofi_p=ofi_info.get("ofi_prev",ofi); last=k15[-1]
+    if last["high"]>vah*1.01 and last["close"]<vah and ofi<ofi_p:
+        sp=max((last["high"]+(last["high"]-vah)*0.3-price)/price*100,0.3)
+        return {"direction":"short","entry":price,"stop_loss":round(last["high"]+(last["high"]-vah)*0.3,1),"target":round(price-sp*2.5*price/100,1),"stop_pct":round(sp,2),"rr":2.5,"score":68,"leverage":10,"pattern":"假突破反杀做空","reasons":["假突破VAH反手"],"risks":[],"key_level":round(vah,1),"strategy":"fakeout_reversal","fvg_info":{"in_fvg":False}}
+    if last["low"]<val*0.99 and last["close"]>val and ofi>ofi_p:
+        sp=max((price-(last["low"]-(val-last["low"])*0.3))/price*100,0.3)
+        return {"direction":"long","entry":price,"stop_loss":round(last["low"]-(val-last["low"])*0.3,1),"target":round(price+sp*2.5*price/100,1),"stop_pct":round(sp,2),"rr":2.5,"score":68,"leverage":10,"pattern":"假突破反杀做多","reasons":["假跌破VAL反手"],"risks":[],"key_level":round(val,1),"strategy":"fakeout_reversal","fvg_info":{"in_fvg":False}}
+    return None
+
+def make_signal(strategy, symbol, direction, entry, stop, target, confidence, leverage=15, risk_pct=0.003, ttl=60, reason=""):
+    risk=abs(entry-stop); rr=abs(target-entry)/risk if risk>0 else 0
+    return {"strategy":strategy,"symbol":symbol,"direction":direction,"entry":entry,"stop_loss":round(stop,1),"target":round(target,1),"rr":round(rr,2),"score":confidence,"confidence":confidence,"leverage":leverage,"risk_pct":risk_pct,"ttl_minutes":ttl,"pattern":strategy,"fvg_info":{"in_fvg":False},"key_level":round(entry,1)}
