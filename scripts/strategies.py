@@ -65,18 +65,21 @@ def ranging_strategy(price: float, vrvp: dict, klines_15m: List[dict],
     poc = vrvp.get("poc", (val + vah) / 2)
     range_width = (vah - val) / price * 100
 
-    # 区间太窄不做（<1%没空间）
-    if range_width < 1.0:
+    # 区间分类：宽震荡≥1.2% / 窄震荡0.7-1.2% / 太窄<0.7%不做
+    is_narrow = "窄震荡" in regime_label
+    min_width = 1.2 if is_narrow else 0.7
+    if range_width < min_width:
         return None
 
-    # 震荡策略参数
+    # 窄震荡时入场容差收紧到±0.1%，宽震荡±0.3%
+    entry_tolerance = 0.001 if is_narrow else 0.003
+
     min_rr = 2.0
     max_stop = 0.8
-    lev = 10
+    lev = 10 if is_narrow else 12
     base_score = 65
 
-    # 接近价值区下沿 → 做多
-    if price <= val * 1.003 and rsi_15m < 50:
+    if price <= val * (1 + entry_tolerance) and rsi_15m < 50:
         stop = val - atr_1h * 0.5
         stop_pct = (price - stop) / price * 100 if price > stop else 0.6
         stop_pct = max(stop_pct, 0.4)
@@ -94,9 +97,7 @@ def ranging_strategy(price: float, vrvp: dict, klines_15m: List[dict],
                 "key_level": round(val, 1),
             }
 
-    # 接近价值区上沿 → 做空
-    if price >= vah * 0.997 and rsi_15m > 50:
-        stop = vah + atr_1h * 0.5
+    if price >= vah * (1 - entry_tolerance) and rsi_15m > 50:
         stop_pct = (stop - price) / price * 100 if stop > price else 0.6
         stop_pct = max(stop_pct, 0.4)
         target = val
