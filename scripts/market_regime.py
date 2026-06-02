@@ -149,6 +149,8 @@ def classify_regime(klines_4h: Optional[List[dict]], klines_15m: Optional[List[d
                     return Regime.FAST_DUMP
 
     # 波动率 —— ATR%
+    atr_val = calc_atr(klines_4h, 14)
+    atr_pct = atr_val / price * 100 if price > 0 else 0
 
     # 均值ATR (近20根)
     if len(klines_4h) >= 30:
