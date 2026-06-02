@@ -34,6 +34,8 @@ from indicators import calc_sma, calc_ema, calc_rsi, calc_atr, calc_local_atr
 from indicators import calc_vwap, calc_bollinger_bands
 from order_flow import analyze as analyze_order_flow
 from signal_voter import evaluate_vote
+from cornix_adapter import send_cornix
+from telegram_adapter import send_telegram, format_signal
 from vrvp import calculate_vrvp, describe as describe_vrvp
 from risk_control import RiskEngine
 from macro import MacroContext
@@ -887,220 +889,9 @@ def save_chat_id(chat_id: int):
         f.write(str(chat_id))
     logger.info(f"chat_id {chat_id} 已持久化")
 
-def _fmt_price_cornix(p: float) -> str:
-    """智能格式化价格"""
-    if p >= 1000: return f"{p:.0f}"
-    elif p >= 10: return f"{p:.3f}"
-    elif p >= 1: return f"{p:.4f}"
-    else: return f"{p:.5f}"
 
-def send_cornix(signal: dict) -> bool:
-    """Cornix 标准信号 — 策略自适应TP/SL/杠杆/追踪"""
-    channel = TELEGRAM.get("cornix_channel", "")
-    if not channel:
-        return False
-    direction = "Long" if signal["direction"] == "long" else "Short"
-    pair = "#" + signal.get("symbol", "BTCUSDT").replace("USDT", "/USDT")
-    entry = signal.get("entry", 0)
-    stop = signal.get("stop_loss", 0)
-    target = signal.get("target", 0)
-    pattern = signal.get("pattern", "")
-    score = signal.get("score", 60)
-    is_eth = "ETH" in pair
 
-    # ─── 策略参数表 ───
-    if "剥头皮" in pattern or "scalp" in pattern.lower():
-        lev = 30 if score >= 75 else (25 if score >= 60 else 20)
-        tp1_pct = 0.45 if is_eth else 0.40
-        sl_pct = 0.25 if is_eth else 0.20
-        tp_count = 1
-        trail_type = "Breakeven"
-    elif "震荡" in pattern or "range" in pattern.lower():
-        lev = 20 if is_eth else 25
-        tp1_pct = 0.50 if is_eth else 0.40
-        sl_pct = 0.35 if is_eth else 0.30
-        tp_count = 2
-        trail_type = "Breakeven"
-    elif "趋势" in pattern or "trend" in pattern.lower():
-        lev = 20 if score >= 75 else 15
-        tp1_pct = 0.65 if is_eth else 0.55
-        sl_pct = 0.45 if is_eth else 0.35
-        tp_count = 1
-        trail_type = "Percent Below Highest"
-    elif "突破" in pattern or "breakout" in pattern.lower():
-        lev = 20
-        tp1_pct = 0.60 if is_eth else 0.50
-        sl_pct = 0.40 if is_eth else 0.30
-        tp_count = 1
-        trail_type = "Percent Below Highest"
-    else:
-        lev = 25; tp1_pct = 0.45; sl_pct = 0.25; tp_count = 1; trail_type = "Breakeven"
 
-    lev = min(lev, signal.get("leverage", 25))
-    fmt = _fmt_price_cornix
-
-    # Entry zone: ±0.08%
-    ep = entry * 0.0008
-    entry_min = entry - ep
-    entry_max = entry + ep
-
-    # TP计算
-    if signal["direction"] == "long":
-        tp1 = entry + entry * tp1_pct / 100
-        tp2 = entry + entry * tp1_pct * 2 / 100 if tp_count >= 2 else 0
-    else:
-        tp1 = entry - entry * tp1_pct / 100
-        tp2 = entry - entry * tp1_pct * 2 / 100 if tp_count >= 2 else 0
-
-    # SL
-    if signal["direction"] == "long":
-        sl_price = min(stop, entry - entry * sl_pct / 100)
-    else:
-        sl_price = max(stop, entry + entry * sl_pct / 100)
-
-    sig_type = "Breakout" if "突破" in pattern else "Regular"
-    trail_dist = "0.35" if is_eth else "0.30"
-
-    # 构建消息
-    lines = [f"{pair}", "", f"Exchanges: OKX Futures", f"Signal Type: {sig_type} ({direction})", f"Leverage: Isolated ({lev}X)", "", "Entry Zone:", f"{fmt(entry_min)} - {fmt(entry_max)}", "", "Take-Profit Targets:", f"1) {fmt(tp1)}"]
-    if tp_count >= 2:
-        lines.append(f"2) {fmt(tp2)}")
-    lines += ["", "Stop Targets:", f"1) {fmt(sl_price)}", "", "Trailing Configuration:", f"Stop: {trail_type}", f"Trigger: Target (1)"]
-    if trail_type == "Percent Below Highest":
-        lines.append(f"Trailing Distance: {trail_dist}%")
-    else:
-        lines.append("")
-    msg = chr(10).join(lines).strip()
-
-    token = TELEGRAM["bot_token"]
-    result = api_post(f"https://api.telegram.org/bot{token}/sendMessage", {"chat_id": channel, "text": msg})
-    if result:
-        logger.info(f"✅ Cornix: {direction} {pair} @ {fmt(entry)} ({lev}X)")
-        return True
-    logger.warning("Cornix发送失败")
-    return False
-def send_telegram(message: str) -> bool:
-    token = TELEGRAM["bot_token"]
-    chat_id = TELEGRAM.get("chat_id") or get_chat_id()
-
-    if not chat_id:
-        updates = api_get(f"https://api.telegram.org/bot{token}/getUpdates", API_TIMEOUT_FAST)
-        if updates and updates.get("result"):
-            for u in updates["result"]:
-                c = u.get("message", {}).get("chat", {})
-                if c.get("id"):
-                    chat_id = c["id"]
-                    TELEGRAM["chat_id"] = chat_id
-                    save_chat_id(chat_id)
-                    break
-
-    if chat_id:
-        result = api_post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-        )
-        if result:
-            return True
-        logger.warning("Telegram 发送失败")
-    return False
-
-def format_signal(signal: dict) -> str:
-    pair = signal.get("pair", "BTC")
-    entry = signal.get("entry", 0)
-    stop = signal.get("stop_loss", 0)
-    target = signal.get("target", 0)
-    stop_pct = signal.get("stop_pct", 0)
-    rr = signal.get("rr", 0)
-    score = signal.get("score", 0)
-    amt = signal.get("amount_pct", 25)
-    lev = signal.get("leverage", 25)
-    reg = signal.get("regime", "?")
-    quality = signal.get("quality_score", 5.5)
-
-    dir_emoji = "🟢" if signal["direction"] == "long" else "🔴"
-    dir_en = "BUY" if signal["direction"] == "long" else "SELL"
-    dir_cn = "做多" if signal["direction"] == "long" else "做空"
-
-    # 评分等级
-    if score >= MIN_SCORE_STRONG: level = "🔥 强信号"
-    elif score >= MIN_SCORE_GOOD: level = "✅ 好信号"
-    elif score >= MIN_SCORE_DECENT: level = "⚠️ 一般信号"
-    else: level = "❌ 弱信号"
-
-    # 杠杆推荐（基于行情评分）
-    if quality >= 7: rec_lev = f"{lev}x"; rec_note = "行情优质，正常杠杆"
-    elif quality >= 5: rec_lev = f"{lev}x"; rec_note = "行情中性，建议降低杠杆"
-    else: rec_lev = f"10-15x"; rec_note = "行情偏差，轻仓严损"
-
-    # 关键位
-    entry_min = signal.get("entry_min", entry * 0.997)
-    entry_max = signal.get("entry_max", entry * 1.003)
-    key_level = signal.get("key_level", entry)
-
-    # 条件判断文本
-    if signal["direction"] == "long":
-        condition = (
-            f"✅ 入场：${entry_min:.0f} - ${entry_max:.0f}\n"
-            f"🛑 止损：${stop:.0f}（{stop_pct:.2f}%）\n"
-            f"🎯 目标：${target:.0f}（+{signal.get('target_pct',0):.2f}%）\n"
-            f"📊 R/R：{rr}:1\n"
-            f"⚡ 杠杆：{rec_lev}（{rec_note}）\n"
-            f"📈 模式：{reg}"
-        )
-        plan = (
-            f"📋 *交易计划*\n"
-            f"方案A（激进）：回踩${entry_min:.0f}附近轻仓试多，"
-            f"止损${stop:.0f}，目标${target:.0f}\n"
-            f"方案B（稳健）：15m收盘站上${entry_max:.0f}确认后入场\n"
-            f"⏱️ 时效：15m级别信号，持有1-4h"
-        )
-    else:
-        condition = (
-            f"✅ 入场：${entry_min:.0f} - ${entry_max:.0f}\n"
-            f"🛑 止损：${stop:.0f}（{stop_pct:.2f}%）\n"
-            f"🎯 目标：${target:.0f}（-{signal.get('target_pct',0):.2f}%）\n"
-            f"📊 R/R：{rr}:1\n"
-            f"⚡ 杠杆：{rec_lev}（{rec_note}）\n"
-            f"📉 模式：{reg}"
-        )
-        plan = (
-            f"📋 *交易计划*\n"
-            f"方案A（激进）：反弹${entry_min:.0f}附近轻仓试空，"
-            f"止损${stop:.0f}，目标${target:.0f}\n"
-            f"方案B（稳健）：15m收盘跌破${entry_max:.0f}确认后入场\n"
-            f"⏱️ 时效：15m级别信号，持有1-4h"
-        )
-
-    # 关键位表格
-    key_levels = (
-        f"📌 *关键位*\n"
-        f"压力区 ${target:.0f}\n"
-        f"关键位 ${key_level:.0f}\n"
-        f"支撑区 ${stop:.0f}"
-    )
-
-    # 理由
-    reasons = signal.get("reasons", [])
-    display_reasons = [r for r in reasons if not r.startswith("6维度评分")]
-    reasons_str = "\n".join(f"• {r}" for r in display_reasons[:4])
-    risks_str = "\n".join(f"⚠️ {r}" for r in signal.get("risks", [])[:3]) if signal.get("risks") else ""
-
-    return (
-        f"📊 *Cipher {pair}* {dir_emoji}\n"
-        f"> {dir_cn} | 评分{score}/100 | 行情感知 {quality}/10\n\n"
-        f"━━━━━ 入场方案 ━━━━━\n"
-        f"{condition}\n\n"
-        f"━━━━━ 计划 ━━━━━\n"
-        f"{plan}\n\n"
-        f"━━━━━ 关键位 ━━━━━\n"
-        f"{key_levels}\n\n"
-        f"理由：{reasons_str}\n"
-        f"{('风险：'+risks_str) if risks_str else ''}"
-    )
-
-# ============================================================
-# 主函数
-# ============================================================
 def fetch_pair(symbol: str, pconf: dict):
     """并发获取单个币种数据"""
     price = get_binance_price(symbol)
@@ -1175,7 +966,7 @@ def run_scan():
         warn = (f"⚠️ *Cipher 暂停交易 — 市场风险过高*\n"
                 f"{chr(10).join(f'• {r}' for r in market_ctx.reasons[:3])}")
         logger.warning("市场风险过高，暂停交易: %s", "; ".join(market_ctx.reasons))
-        send_telegram(warn)
+        send_telegram(warn, TELEGRAM)
         return
 
     # v5: 初始化风控引擎
@@ -1357,7 +1148,7 @@ def run_scan():
                 except Exception as e:
                     logger.error(f"写入去重文件失败: {e}")
                 send_telegram(format_signal(signal))
-                send_cornix(signal)  # Cornix 自动执行
+                send_cornix(signal, TELEGRAM)  # Cornix 自动执行
                 signals_found += 1
             except Exception as e:
                 logger.error(f"  ❌ 信号处理异常: {e}", exc_info=True)
@@ -1481,9 +1272,42 @@ def run_log():
         print(f"{h.get('id','?'):8} {t:20} {h.get('direction','?'):6} {h.get('score',0):6} {h.get('rr',0):6.1f} {h.get('amount_pct',0):6} {h.get('pattern','?'):16} {h.get('status','?'):10}")
 
 # ============================================================
+def run_fast_scan():
+    """1分钟快扫 — 仅OFI剥头皮信号，跳过全量分析"""
+    logger.info("=" * 40)
+    logger.info("Cipher 快扫描 — OFI剥头皮")
+    ofi = analyze_order_flow("BTCUSDT")
+    if abs(ofi.get("ofi", 0)) < 0.5:
+        return
+    price = get_binance_price("BTCUSDT")
+    k15 = get_klines("BTCUSDT", "15m", 14)
+    if not price or not k15:
+        return
+    from strategies import scalping_strategy
+    sig = scalping_strategy(price, ofi, k15, "fast")
+    if not sig:
+        return
+    sig["signal_id"] = generate_signal_id()
+    sig["pair"] = "BTC"
+    sig["symbol"] = "BTCUSDT"
+    sig["leverage"] = sig.get("leverage", 25)
+    # 风控检查
+    risk_engine = RiskEngine()
+    risk_passed, _ = risk_engine.check_all({})
+    if not risk_passed:
+        return
+    if is_signal_executed(sig["signal_id"]):
+        return
+    mark_signal_executed(sig["signal_id"])
+    log_trade(sig, "sent")
+    send_telegram(format_signal(sig))
+    send_cornix(sig, TELEGRAM)
+    logger.info(f"✅ OFI剥头皮信号已发送")
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "scan"
     if mode == "scan": run_scan()
+    elif mode == "fastscan": run_fast_scan()
     elif mode == "summary": run_summary()
     elif mode == "review": run_review()
     elif mode == "log": run_log()

@@ -41,7 +41,10 @@ DEFAULT_RISK_CONFIG = {
     "order_timeout_seconds": 300,     # 订单超时 5 分钟
     "capital_base": 10000,            # 本金基数
     "daily_profit_lock_pct": 8.0,     # 单日盈利达8%锁仓停机
+    "daily_peak_drawdown_pct": 2.0,   # 日内盈利回撤>2%停机
     "use_capital_pct": 0.25,          # 每笔使用本金比例25%
+    "min_net_profit_usdt": 20,        # 单笔最低净利润20U
+    "capital_base": 1000,             # 本金基数
     "max_position_time_minutes": 120, # 最大持仓时间
     "fee_pct": 0.05,                  # 手续费率%
     "slippage_pct": 0.08,             # 预估滑点%
@@ -179,8 +182,37 @@ class RiskEngine:
             return False
         return True
 
-    # ─── 8. 最大持仓时间 ───
-    def check_max_position_time(self, open_time: float) -> bool:
+    # ─── 8. 净利润过滤（扣除费用后净赚≥20U）───
+    def check_net_profit(self, entry: float, stop: float, target: float,
+                         direction: str, leverage: int, pattern: str) -> Tuple[bool, float]:
+        capital = self.config["capital_base"] * self.config["use_capital_pct"]
+        notional = capital * leverage
+        if direction == "long":
+            gross_pnl = (target - entry) / entry * notional
+        else:
+            gross_pnl = (entry - target) / entry * notional
+        fee = self.config["fee_pct"] / 100 * notional * 2
+        slippage = self.config["slippage_pct"] / 100 * notional
+        net = gross_pnl - fee - slippage
+        min_net = self.config["min_net_profit_usdt"]
+        if "剥头皮" in pattern or "scalp" in pattern.lower():
+            min_rr = 1.5
+            if net / 20 < 1.5: pass  # 剥头皮可接受略低
+        if net < min_net:
+            self.violations.append(f"净利润${net:.1f}<${min_net}，拒单")
+            return False, round(net, 1)
+        return True, round(net, 1)
+
+    # ─── 9. 最大持仓时间（策略自适应）───
+    STRATEGY_TTL = {
+        "scalp": 12, "剥头皮": 12,
+        "fakeout": 45, "假突破": 45,
+        "range": 90, "震荡": 90,
+        "breakout": 180, "突破": 180,
+        "trend": 240, "趋势": 240,
+        "vwap": 60, "波动": 60,
+    }
+    def check_max_position_time(self, open_time: float, pattern: str = "") -> bool:
         """超过最大持仓时间未达TP1 → 强制退出"""
         if open_time <= 0:
             return True
@@ -278,6 +310,12 @@ class RiskEngine:
             if not self.check_liquidation_distance(price, liq_price, direction):
                 passed = False
             if not self.check_real_rr(price, stop, target, direction):
+                passed = False
+            # 净利润过滤
+            lev = signal.get("leverage", 15)
+            pat = signal.get("pattern", "")
+            net_ok, net_val = self.check_net_profit(price, stop, target, direction, lev, pat)
+            if not net_ok:
                 passed = False
             if order_book and not self.check_spread_and_depth(order_book):
                 passed = False

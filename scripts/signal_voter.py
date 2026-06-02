@@ -50,7 +50,11 @@ class VoteResult:
             "confidence": confidence, "weight": weight, "reason": reason,
         })
 
-    def decide(self, min_sources: int = 2, min_confidence: int = 50) -> Tuple[Optional[str], int, List[str]]:
+    HARD_SOURCES = ["OFI", "OI+费率", "VRVP", "FVG检测", "行情模式"]
+    SOFT_SOURCES = ["技术面"]
+
+    def decide(self, min_sources: int = 3, min_confidence: int = 50,
+               min_hard_sources: int = 1) -> Tuple[Optional[str], int, List[str]]:
         """
         投票决策
 
@@ -73,15 +77,20 @@ class VoteResult:
 
         reasons = []
 
-        # 至少 min_sources 个信号源支持同一方向
-        if long_score > short_score and self.long_sources >= min_sources:
+        # 统计硬源支持数
+        def _hard_count(d):
+            return sum(1 for s in self.details if s["direction"] == d and s["confidence"] >= 50
+                       and any(h in s["name"] for h in self.HARD_SOURCES))
+
+        # 至少 min_sources 个信号源 + 至少1个硬源
+        if long_score > short_score and self.long_sources >= min_sources and _hard_count("long") >= min_hard_sources:
             confidence = int(long_score)
             if confidence >= min_confidence:
                 reasons.append(f"技术面{self._fmt_src('long')}")
                 reasons.append(f"投票结果: 做多 {confidence}% 置信")
                 return "long", confidence, reasons
 
-        elif short_score > long_score and self.short_sources >= min_sources:
+        elif short_score > long_score and self.short_sources >= min_sources and _hard_count("short") >= min_hard_sources:
             confidence = int(short_score)
             if confidence >= min_confidence:
                 reasons.append(f"技术面{self._fmt_src('short')}")
