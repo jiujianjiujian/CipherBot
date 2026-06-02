@@ -187,7 +187,7 @@ def generate_daily_report() -> str:
     avg_rr = sum(float(t.get("rr", 0)) or 0 for t in trades) / total if total > 0 else 0
     avg_score = sum(t.get("score", 0) or 0 for t in trades) / total if total > 0 else 0
 
-    # 信号源统计（从reason字段提取）
+    # 信号源统计
     all_reasons = []
     for t in trades:
         reasons = t.get("reason", "") if isinstance(t.get("reason"), str) else ""
@@ -195,6 +195,28 @@ def generate_daily_report() -> str:
 
     long_count = sum(1 for t in trades if t.get("direction") == "long")
     short_count = sum(1 for t in trades if t.get("direction") == "short")
+
+    # 策略贡献统计
+    strategy_stats = {}
+    for t in trades:
+        sid = t.get("strategy", t.get("pattern", "未知"))
+        pnl = float(t.get("pnl", 0)) or 0
+        if sid not in strategy_stats:
+            strategy_stats[sid] = {"trades": 0, "wins": 0, "pnl": 0, "rr": []}
+        strategy_stats[sid]["trades"] += 1
+        strategy_stats[sid]["pnl"] += pnl
+        if pnl > 0: strategy_stats[sid]["wins"] += 1
+        rr = t.get("rr", 0) or 0
+        strategy_stats[sid]["rr"].append(rr)
+
+    strat_lines = []
+    for sid, s in sorted(strategy_stats.items(), key=lambda x: -x[1]["pnl"]):
+        wr = round(s["wins"] / s["trades"] * 100, 1) if s["trades"] > 0 else 0
+        avg_r = round(sum(s["rr"]) / len(s["rr"]), 2) if s["rr"] else 0
+        strat_lines.append(f"{sid}: {s['pnl']:+.2f}% ({wr}%胜率) R均值{avg_r}")
+
+    best_strat = max(strategy_stats, key=lambda k: strategy_stats[k]["pnl"]) if strategy_stats else "无"
+    worst_strat = min(strategy_stats, key=lambda k: strategy_stats[k]["pnl"]) if strategy_stats else "无"
 
     # 最大回撤
     max_drawdown = 0
@@ -210,6 +232,8 @@ def generate_daily_report() -> str:
         os.path.join(LOG_DIR, "risk_state.json")
     ) else {}
 
+    strat_report = "\n".join(strat_lines[:6]) if strat_lines else "无"
+
     report = (
         f"📊 *Cipher 实盘复盘日报*\n"
         f"日期：{today}\n\n"
@@ -221,6 +245,10 @@ def generate_daily_report() -> str:
         f"最大浮亏：-{max_drawdown:.2f}%\n"
         f"平均R/R：{avg_rr:.1f}\n"
         f"平均评分：{avg_score:.0f}/100\n\n"
+        f"━━━━━ 策略贡献 ━━━━━\n"
+        f"{strat_report}\n"
+        f"最佳策略：{best_strat}\n"
+        f"最差策略：{worst_strat}\n\n"
         f"━━━━━ 风控 ━━━━━\n"
         f"日亏损熔断：{'⚠️ 已触发' if risk_state.get('loss_limit_hit') else '✅ 正常'}\n"
         f"连亏计数：{risk_state.get('consecutive_losses', 0)}\n\n"

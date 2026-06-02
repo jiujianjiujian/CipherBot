@@ -45,12 +45,18 @@ FEATURE_HEADERS = [
     "ofi", "taker_buy_ratio",
     "vwap_distance", "bb_position", "bb_bandwidth",
     "regime", "quality_score",
-    "label_30m",  # 30分钟后涨跌
-    "label_60m",  # 60分钟后涨跌
-    "label_120m", # 120分钟后涨跌
-    "mfe_pct",    # 最大顺向波动
-    "mae_pct",    # 最大逆向波动
-    "r_multiple", # 最终R倍数
+    "label_30m",     # 30分钟后涨跌
+    "label_60m",     # 60分钟后涨跌
+    "label_120m",    # 120分钟后涨跌
+    "mfe_pct",       # 最大顺向波动
+    "mae_pct",       # 最大逆向波动
+    "r_multiple",    # 最终R倍数
+    "tp1_first",     # 是否先到TP1 1/0
+    "sl_first",      # 是否先到SL 1/0
+    "breakeven_hit", # 是否触发保本 1/0
+    "net_r",         # 扣除费用后实际R
+    "fee_pct",       # 手续费占比%
+    "strategy_id",   # 策略ID
 ]
 
 
