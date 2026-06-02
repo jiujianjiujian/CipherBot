@@ -3,10 +3,23 @@
 Cornix 信号适配器 — 策略自适应格式转换 + 推送
 """
 import logging
-from urllib.request import Request, urlopen
 import json
+import os, sys
+from urllib.request import Request, urlopen
+
+# 读取交易所配置（config.py中的EXCHANGE变量）
+_EXCHANGE = "Binance Futures"
+try:
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    if _script_dir not in sys.path:
+        sys.path.insert(0, _script_dir)
+    from config import EXCHANGE
+    _EXCHANGE = EXCHANGE
+except:
+    pass
 
 logger = logging.getLogger("Cipher")
+_EXCHANGE = "Binance Futures"
 
 
 def _fmt_price_cornix(p: float) -> str:
@@ -71,7 +84,7 @@ def send_cornix(signal: dict, telegram_config: dict) -> bool:
     sig_type = "Breakout" if "突破" in pattern else "Regular"
     trail_dist = "0.35" if is_eth else "0.30"
 
-    lines = [f"{pair}", "", "Exchanges: OKX Futures",
+    lines = [f"{pair}", "", f"Exchanges: {_EXCHANGE}",
              f"Signal Type: {sig_type} ({direction})",
              f"Leverage: Isolated ({lev}X)", "",
              "Entry Zone:", f"{fmt(entry_min)} - {fmt(entry_max)}", "",
