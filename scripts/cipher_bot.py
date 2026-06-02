@@ -68,7 +68,7 @@ API_TIMEOUT_SLOW = 15    # Telegram/Webhook（15秒）
 CANDLE_CLOSE_BUFFER = 120  # K线收盘前120秒不下单（2分钟）
 MAX_TRADE_LOG_SIZE = 10 * 1024 * 1024  # 日志10MB轮转
 LAST_SIGNAL_FILE = os.path.join(LOG_DIR, "last_signal.json")
-SIGNAL_COOLDOWN_SEC = 1800  # 同币种同向信号冷却30分钟
+SIGNAL_COOLDOWN_SEC = 1800  # 同币种同向信号冷却30分钟（动态调整: 趋势强时自动缩短）
 
 # v4 新增常量（从配置读取，避免双源）
 MIN_SCORE_STRONG = TRADING.get("score_strong", 80)
@@ -695,6 +695,9 @@ def find_trading_signal(price: float, ticker_24h: dict,
                 if adj != 0:
                     sig_score = max(0, min(100, sig_score + adj))
                     reasons.append(adj_reason)
+            if ofi_info and ofi_info.get("ofi", 0) > 0.3:
+                sig_score = min(100, sig_score + 3)
+                reasons.append("OFI做多确认+3")
             if sig_score >= MIN_SCORE_DECENT:
                 candidates.append({
                     "direction": "long", "entry": price,
@@ -751,6 +754,9 @@ def find_trading_signal(price: float, ticker_24h: dict,
                 if adj != 0:
                     sig_score = max(0, min(100, sig_score + adj))
                     reasons.append(adj_reason)
+            if ofi_info and ofi_info.get("ofi", 0) < -0.3:
+                sig_score = min(100, sig_score + 3)
+                reasons.append("OFI做空确认+3")
             if sig_score >= MIN_SCORE_DECENT:
                 candidates.append({
                     "direction": "short", "entry": price,
@@ -990,6 +996,15 @@ def run_scan():
         send_telegram("⚠️ *Binance API 异常*\n暂停交易，等待恢复")
         return
 
+    # v5: 动态冷却 — 趋势强+OFI确认时10分钟，否则30分钟
+    ofi_val = btc_ofi.get("ofi", 0)
+    if (market_ctx.btc_trend == "downtrend" and ofi_val < -0.3) or \
+       (market_ctx.btc_trend == "uptrend" and ofi_val > 0.3):
+        _cooldown = 600  # 趋势确认→10分钟冷却
+        logger.info(f"  趋势强劲，冷却缩短至10分钟 (OFI={ofi_val:+.2f})")
+    else:
+        _cooldown = SIGNAL_COOLDOWN_SEC
+
     signals_found = 0
     enabled_pairs = [(k, v) for k, v in PAIRS.items() if v.get("enabled", False)]
 
@@ -1055,7 +1070,7 @@ def run_scan():
                 if last_sig.get("pair") == pair_name and last_sig.get("direction") == signal["direction"]:
                     price_diff = abs(last_sig.get("entry", 0) - price) / price * 100
                     time_diff = datetime.now(timezone.utc).timestamp() - last_sig.get("ts", 0)
-                    if price_diff < 0.3 and time_diff < SIGNAL_COOLDOWN_SEC:
+                    if price_diff < 0.3 and time_diff < _cooldown:
                         logger.info(f"  ⏸️ 去重: 同{pair_name}同方向价差{price_diff:.2f}% 距上次{int(time_diff//60)}分，跳过")
                         continue
                 # v5: 多信号投票引擎
