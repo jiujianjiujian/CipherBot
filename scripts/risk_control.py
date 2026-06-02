@@ -193,22 +193,29 @@ class RiskEngine:
             return False
         return True
 
-    # ─── 8. 净利润过滤（扣除费用后净赚≥20U）───
+    # ─── 8. 净利润过滤（扣除费用后净赚≥20U，使用fee_model）───
     def check_net_profit(self, entry: float, stop: float, target: float,
                          direction: str, leverage: int, pattern: str) -> Tuple[bool, float]:
-        capital = self.config["capital_base"] * self.config["use_capital_pct"]
-        notional = capital * leverage
-        if direction == "long":
-            gross_pnl = (target - entry) / entry * notional
-        else:
-            gross_pnl = (entry - target) / entry * notional
-        fee = self.config["fee_pct"] / 100 * notional * 2
-        slippage = self.config["slippage_pct"] / 100 * notional
-        net = gross_pnl - fee - slippage
+        try:
+            from fee_model import estimate_cost
+            cost = estimate_cost(entry, stop, target, leverage,
+                                 self.config["capital_base"] * self.config["use_capital_pct"],
+                                 is_maker_entry=("剥头皮" not in pattern and "scalp" not in pattern.lower()),
+                                 is_maker_exit=("止损" not in pattern))
+            net = cost["net_pnl"]
+        except ImportError:
+            # fee_model不可用时的回退计算
+            capital = self.config["capital_base"] * self.config["use_capital_pct"]
+            notional = capital * leverage
+            if direction == "long":
+                gross_pnl = (target - entry) / entry * notional
+            else:
+                gross_pnl = (entry - target) / entry * notional
+            fee = self.config["fee_pct"] / 100 * notional * 2
+            slip = self.config["slippage_pct"] / 100 * notional
+            net = gross_pnl - fee - slip
+
         min_net = self.config["min_net_profit_usdt"]
-        if "剥头皮" in pattern or "scalp" in pattern.lower():
-            min_rr = 1.5
-            if net / 20 < 1.5: pass  # 剥头皮可接受略低
         if net < min_net:
             self.violations.append(f"净利润${net:.1f}<${min_net}，拒单")
             return False, round(net, 1)

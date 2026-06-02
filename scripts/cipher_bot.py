@@ -1173,6 +1173,13 @@ def run_scan():
                     logger.error(f"写入去重文件失败: {e}")
                 send_telegram(format_signal(signal))
                 send_cornix(signal, TELEGRAM)  # Cornix 自动执行
+                # 记录本地仓位（用于对账）
+                try:
+                    from binance_reconciler import save_local_position
+                    save_local_position(signal.get("symbol", "BTCUSDT"),
+                                        signal["direction"], signal.get("entry", 0),
+                                        signal.get("amount_pct", 0))
+                except: pass
                 signals_found += 1
             except Exception as e:
                 logger.error(f"  ❌ 信号处理异常: {e}", exc_info=True)
@@ -1325,6 +1332,12 @@ def run_fast_scan():
     mark_signal_executed(sig["signal_id"])
     log_trade(sig, "sent")
     send_telegram(format_signal(sig))
+    try:
+        from binance_reconciler import save_local_position
+        save_local_position(sig.get("symbol", "BTCUSDT"),
+                            sig["direction"], sig.get("entry", 0),
+                            sig.get("amount_pct", 0))
+    except: pass
     send_cornix(sig, TELEGRAM)
     logger.info(f"✅ OFI剥头皮信号已发送")
 
