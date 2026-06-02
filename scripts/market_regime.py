@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 class Regime(Enum):
     TRENDING_BULL = "trending_bull"
     TRENDING_BEAR = "trending_bear"
+    SLOW_BEAR = "slow_bear"     # 阴跌: 反弹弱+逐级破位
     RANGING = "ranging"
     VOLATILE = "volatile"
     UNKNOWN = "unknown"
@@ -23,6 +24,17 @@ class Regime(Enum):
 
 # 各行情模式下的策略参数
 REGIME_PARAMS: Dict[Regime, dict] = {
+    Regime.SLOW_BEAR: {
+        "label": "🐌 阴跌行情",
+        "size_multiplier": 1.0,
+        "min_rr": 2.5,
+        "max_stop_pct": 0.55,
+        "prefer_long": False,
+        "score_bonus_short": 8,
+        "score_penalty_long": 12,
+        "trailing_pct": 0.35,
+        "max_leverage": 20,
+    },
     Regime.TRENDING_BULL: {
         "label": "📈 上升趋势",
         "size_multiplier": 1.3,        # 加仓30%（原20%）
@@ -106,16 +118,22 @@ def classify_regime(klines_4h: Optional[List[dict]]) -> Regime:
     if atr_pct > 2.0 or (avg_atr_pct > 0 and atr_pct > avg_atr_pct * 1.5):
         return Regime.VOLATILE
 
-    # ─── Step 2: 趋势判断 ───
-    # EMA20 > EMA50 且价格在EMA20之上 → 上升趋势
+    # ─── Step 2: 阴跌识别（SLOW_BEAR）───
+    # 条件: EMA20<EMA50 + 价格<EMA20 + 低波动 + 持续阴线
+    if ema20 < ema50 * 0.995 and price < ema20:
+        # 检查是否为阴跌（慢跌+弱反弹）
+        closes_slice = closes[-6:] if len(closes) >= 6 else closes
+        consecutive_below_ema20 = sum(1 for c in closes_slice if c < ema20)
+        # 最近6根有5根在EMA20以下 = 持续弱势
+        if consecutive_below_ema20 >= 5 and atr_pct < 1.5:
+            return Regime.SLOW_BEAR
+        return Regime.TRENDING_BEAR
+
+    # ─── Step 3: 趋势判断 ───
     if ema20 > ema50 * 1.005 and price > ema20:
         return Regime.TRENDING_BULL
 
-    # EMA20 < EMA50 且价格在EMA20之下 → 下降趋势
-    if ema20 < ema50 * 0.995 and price < ema20:
-        return Regime.TRENDING_BEAR
-
-    # ─── Step 3: 其余情况 → 震荡 ───
+    # ─── Step 4: 其余情况 → 震荡 ───
     return Regime.RANGING
 
 

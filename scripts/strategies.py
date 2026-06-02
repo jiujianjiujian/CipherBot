@@ -231,6 +231,11 @@ def route_strategy(regime_label: str, price: float, ticker: dict,
     sig = scalping_strategy(price, ofi_info, k15, regime_label)
     if sig: candidates.append(sig)
 
+    # 阴跌反弹做空
+    if "阴跌" in regime_label:
+        sig = slow_bear_short_strategy(price, ticker, k15, k1h, vrvp, ofi_info, rsi_15m, rsi_1h, base_stop_atr, 0, regime_label)
+        if sig: candidates.append(sig)
+
     sig = breakout_retest_strategy(price, ticker, k15, k4h, vrvp, ofi_info, rsi_15m, rsi_1h, structure, regime_label)
     if sig: candidates.append(sig)
 
@@ -240,6 +245,43 @@ def route_strategy(regime_label: str, price: float, ticker: dict,
         if sig: candidates.append(sig)
 
     return candidates
+
+
+def slow_bear_short_strategy(price, ticker, k15, k1h, vrvp, ofi_info, rsi_15m, rsi_1h, ema20, vwap, label):
+    """阴跌反弹做空策略 — 不追低、等反弹、反弹不过VWAP/EMA20再空"""
+    if "阴跌" not in label: return None
+    vwap = vwap or 0
+    if not k15 or len(k15) < 6: return None
+    closes = [k["close"] for k in k15[-6:]]
+    highs = [k["high"] for k in k15[-6:]]
+    above_ema = price > ema20 if ema20 else False
+    above_vwap = price > vwap if vwap else False
+
+    # 反抽VWAP/EMA20失败 + OFI转负
+    if above_vwap or above_ema:
+        return None  # 还没到反弹位
+    near_resistance = (vwap > 0 and price >= vwap * 0.985) or (ema20 > 0 and price >= ema20 * 0.985)
+    if not near_resistance:
+        return None  # 离反弹位还远，不追低
+    ofi = ofi_info.get("ofi", 0) if ofi_info else 0
+    if ofi > -0.1:
+        return None  # 卖压不够
+
+    sl = max(highs[-3:]) + (price * 0.0015)
+    sp = max((sl - price) / price * 100, 0.3)
+    tp = price - sp * 2.5 * price / 100
+    rr = abs(price - tp) / abs(price - sl) if abs(price - sl) > 0 else 0
+    if sp < 0.7 and rr >= 2.0:
+        return {
+            "direction": "short", "entry": price,
+            "stop_loss": round(sl, 1), "target": round(tp, 1),
+            "stop_pct": round(sp, 2), "rr": round(rr, 2),
+            "score": 68, "leverage": 18, "pattern": "阴跌反弹做空",
+            "reasons": [f"反弹EMA20/VWAP失败 OFI={ofi:+.2f}"], "risks": [],
+            "key_level": round(sl, 1), "strategy": "slow_bear_short",
+            "fvg_info": {"in_fvg": False},
+        }
+    return None
 
 
 def breakout_retest_strategy(price, ticker, k15, k4h, vrvp, ofi_info, rsi_15m, rsi_1h, structure, label):
