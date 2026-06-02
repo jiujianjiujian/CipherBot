@@ -131,27 +131,27 @@ def evaluate_vote(
     # ─── 信号源1: 技术面得分（权重0.30）───
     tech_confidence = min(100, signal_score)
     tech_dir = signal_direction
-    voter.add_source("技术面", tech_dir, tech_confidence, 0.30,
+    voter.add_source("技术面", tech_dir, tech_confidence, 0.25,
                       f"评分{signal_score} R/R={signal_rr}")
 
     # ─── 信号源2: FVG检测（权重0.20）───
     if fvg_info and fvg_info.get("in_fvg"):
         fvg_type = fvg_info.get("fvg", {}).get("type", "")
         if fvg_type == "bullish":
-            voter.add_source("FVG检测", "long", 80, 0.20, "看涨FVG触发")
+            voter.add_source("FVG检测", "long", 80, 0.18, "看涨FVG触发")
         elif fvg_type == "bearish":
-            voter.add_source("FVG检测", "short", 80, 0.20, "看跌FVG触发")
+            voter.add_source("FVG检测", "short", 80, 0.18, "看跌FVG触发")
 
     # ─── 信号源3: OI/资金费率（权重0.20）───
     if oi_info:
         oi_signal = oi_info.get("signal", "neutral")
         oi_reason = oi_info.get("reason", "")
         if oi_signal == "short_boost":
-            voter.add_source("OI+费率", "short", 75, 0.20, oi_reason)
+            voter.add_source("OI+费率", "short", 75, 0.18, oi_reason)
         elif oi_signal == "long_boost":
-            voter.add_source("OI+费率", "long", 75, 0.20, oi_reason)
+            voter.add_source("OI+费率", "long", 75, 0.18, oi_reason)
         elif oi_signal == "no_chase":
-            voter.add_source("OI+费率", "neutral", 60, 0.20, oi_reason)
+            voter.add_source("OI+费率", "neutral", 60, 0.18, oi_reason)
 
     # ─── 信号源4: 订单流（权重0.20）───
     if ofi_info:
@@ -160,14 +160,14 @@ def evaluate_vote(
         ofi_dir = "long" if ofi_signal in ("bullish", "mild_bullish") else (
             "short" if ofi_signal in ("bearish", "mild_bearish") else "neutral")
         if ofi_dir != "neutral":
-            voter.add_source("订单流", ofi_dir, min(100, ofi_strength), 0.20,
+            voter.add_source("订单流", ofi_dir, min(100, ofi_strength), 0.18,
                               f"OFI={ofi_info.get('ofi',0):.2f} 吃单买比={ofi_info.get('taker_buy_ratio',50):.0f}%")
 
     # ─── 信号源5: 行情模式（权重0.10）───
     if "上升" in regime_label:
-        voter.add_source("行情模式", "long", 70, 0.10, regime_label)
+        voter.add_source("行情模式", "long", 70, 0.09, regime_label)
     elif "下降" in regime_label:
-        voter.add_source("行情模式", "short", 70, 0.10, regime_label)
+        voter.add_source("行情模式", "short", 70, 0.09, regime_label)
 
     # ─── 信号源6: VRVP成交量分布（权重0.10）───
     if vrvp_info:
@@ -175,14 +175,14 @@ def evaluate_vote(
         vrvp_signal = vrvp_info.get("signal", "neutral")
         vrvp_strength = vrvp_info.get("strength", 30)
         if vrvp_pos == "above_va" and "bull" in vrvp_signal:
-            voter.add_source("VRVP", "long", min(80, vrvp_strength), 0.10,
+            voter.add_source("VRVP", "long", min(80, vrvp_strength), 0.12,
                               f"价格在价值区上方 POC=${vrvp_info.get('poc',0)}")
         elif vrvp_pos == "below_va" and "bear" in vrvp_signal:
-            voter.add_source("VRVP", "short", min(80, vrvp_strength), 0.10,
+            voter.add_source("VRVP", "short", min(80, vrvp_strength), 0.12,
                               f"价格在价值区下方 POC=${vrvp_info.get('poc',0)}")
         elif vrvp_pos == "near_poc":
             # POC附近=关键位置，不投票但加分
-            voter.add_source("VRVP", signal_direction, 50, 0.10,
+            voter.add_source("VRVP", signal_direction, 50, 0.12,
                               f"POC附近关键位")
 
     # 投票决定
