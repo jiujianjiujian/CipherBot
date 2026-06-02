@@ -94,16 +94,44 @@ def check_add():
             pos = get_position(sym)
             pn = pc.get("name", sym)
             logger.info(f"✅ {pn} 趋势延续→加仓")
-            sig = {"direction":pos["direction"], "entry":pos["mark"], "stop_loss":0,
-                   "target":0, "stop_pct":0.5, "target_pct":0, "rr":0, "score":80,
-                   "amount_pct":ADD_PCT, "pattern":f"趋势延续加仓({pn})",
-                   "pair":pn, "symbol":sym, "leverage":pc.get("leverage",25),
-                   "reasons":[f"趋势延续确认"], "risks":[]}
+
+            # 计算ATR-based止损和目标价
+            k15 = get_klines(sym, "15m", 30)
+            if k15:
+                atr = calc_atr(k15, 14)
+                entry_price = pos["mark"]
+                if pos["direction"] == "long":
+                    stop_loss = entry_price - atr * 1.5
+                    target = entry_price + atr * 3
+                else:
+                    stop_loss = entry_price + atr * 1.5
+                    target = entry_price - atr * 3
+                stop_pct = abs(entry_price - stop_loss) / entry_price * 100
+                target_pct = abs(target - entry_price) / entry_price * 100
+                rr = round(target_pct / stop_pct, 1) if stop_pct > 0 else 0
+            else:
+                stop_loss = entry_price * (0.99 if pos["direction"] == "long" else 1.01)
+                target = entry_price * (1.02 if pos["direction"] == "long" else 0.98)
+                stop_pct = 1.0
+                target_pct = 2.0
+                rr = 2.0
+
+            sig = {
+                "direction": pos["direction"], "entry": pos["mark"],
+                "stop_loss": round(stop_loss, 1), "target": round(target, 1),
+                "stop_pct": round(stop_pct, 2), "target_pct": round(target_pct, 2),
+                "rr": rr, "score": 80,
+                "amount_pct": ADD_PCT, "pattern": f"趋势延续加仓({pn})",
+                "pair": pn, "symbol": sym, "leverage": pc.get("leverage", 25),
+                "reasons": ["趋势延续确认"], "risks": [],
+            }
+
             send_telegram(
                 f"📈 *{pn} 趋势延续加仓*\n"
                 f"{'做多🟢' if pos['direction']=='long' else '做空🔴'}\n"
                 f"当前 ${pos['mark']:.0f} | 浮盈 +{pos['pnl_pct']:.1f}%\n"
-                f"加仓 {ADD_PCT}% | 追踪止损保护全部仓位"
+                f"加仓 {ADD_PCT}% | 止损 ${sig['stop_loss']:.0f} | 目标 ${sig['target']:.0f}\n"
+                f"ATR止损保护全部仓位"
             )
             send_cornix(sig)
 

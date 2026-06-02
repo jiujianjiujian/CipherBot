@@ -24,8 +24,23 @@ from urllib.request import Request, urlopen
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import TELEGRAM, TRADING, ANALYSIS, SCORING, TRADE_LOG_FILE, PAIRS
+from config import TELEGRAM, TRADING, ANALYSIS, SCORING, TRADE_LOG_FILE, PAIRS, VERSION
+from config import SMC_CONFIG, CONTEXT_CONFIG, FETCH_LIMITS
 from validator import validate_analysis
+from smc import detect_fvg, is_price_in_fvg
+from market_context import evaluate_market_context
+from market_regime import classify_regime, get_regime_params, get_score_adjustment
+from indicators import calc_sma, calc_ema, calc_rsi, calc_atr, calc_local_atr
+from indicators import calc_vwap, calc_bollinger_bands
+from order_flow import analyze as analyze_order_flow
+from signal_voter import evaluate_vote
+from vrvp import calculate_vrvp, describe as describe_vrvp
+from risk_control import RiskEngine
+from macro import MacroContext
+from strategies import route_strategy, breakout_retest_strategy, fakeout_reversal_strategy, make_signal
+from strategy_router import StrategyRouter
+from safety import generate_signal_id, is_signal_executed, mark_signal_executed
+from safety import check_event_blackout, check_health, generate_daily_report
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -36,7 +51,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "cipher.log")),
+        logging.FileHandler(os.path.join(LOG_DIR, "cipher.log"), encoding="utf-8"),
         logging.StreamHandler()
     ]
 )
@@ -59,6 +74,10 @@ MIN_SCORE_GOOD = TRADING.get("score_good", 60)
 MIN_SCORE_DECENT = TRADING.get("score_decent", 40)
 VOL_SURGE_STRONG = 2.0    # 强放量阈值
 VOL_SURGE_NORMAL = 1.5    # 正常放量阈值
+
+# v5 SMC 常量
+FVG_TOLERANCE = SMC_CONFIG.get("fvg_tolerance_pct", 0.15)
+FVG_SCORE_BONUS = SMC_CONFIG.get("fvg_score_bonus", 5)
 
 # 活跃币种列表（从配置读取）
 ACTIVE_PAIRS = [k for k, v in PAIRS.items() if v.get("enabled", False)]
@@ -271,6 +290,32 @@ def get_klines(symbol: str, interval: str, limit: int = 50) -> Optional[List[dic
         } for k in data]
     return None
 
+# ============================================================
+# 合约市场数据：OI + 资金费率（v5）
+# ============================================================
+def get_open_interest(symbol: str = "BTCUSDT") -> Optional[float]:
+    """获取当前未平仓合约量"""
+    data = api_get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", API_TIMEOUT_FAST)
+    return float(data["openInterest"]) if data else None
+
+def get_oi_history(symbol: str = "BTCUSDT", period: str = "15m", limit: int = 96) -> Optional[List[dict]]:
+    """获取历史OI数据（按period间隔，用于分析OI趋势）"""
+    url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period={period}&limit={limit}"
+    return api_get(url, API_TIMEOUT_NORMAL)
+
+def get_funding_rates(symbol: str = "BTCUSDT", limit: int = 50) -> Optional[List[dict]]:
+    """获取历史资金费率"""
+    url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit={limit}"
+    return api_get(url, API_TIMEOUT_FAST)
+
+def get_contract_data(symbol: str = "BTCUSDT") -> dict:
+    """一次性获取所有合约数据"""
+    return {
+        "oi": get_open_interest(symbol),
+        "oi_history": get_oi_history(symbol),
+        "funding": get_funding_rates(symbol),
+    }
+
 def is_candle_closing(klines: List[dict], interval_minutes: int = 15) -> bool:
     """判断当前K线是否即将收盘，临近收盘不下单（防止插针假信号）"""
     if not klines:
@@ -283,54 +328,6 @@ def is_candle_closing(klines: List[dict], interval_minutes: int = 15) -> bool:
         logger.info(f"⏳ 当前K线还剩{remaining:.0f}s，等待下一根确认")
         return True
     return False
-
-# ============================================================
-# 高级技术指标
-# ============================================================
-def calc_sma(values: List[float], period: int) -> float:
-    if len(values) < period:
-        return sum(values) / len(values)
-    return sum(values[-period:]) / period
-
-def calc_ema(values: List[float], period: int) -> float:
-    if len(values) < period:
-        return sum(values) / len(values)
-    multiplier = 2 / (period + 1)
-    ema = sum(values[:period]) / period
-    for v in values[period:]:
-        ema = (v - ema) * multiplier + ema
-    return ema
-
-def calc_rsi(closes: List[float], period: int = 14) -> float:
-    if len(closes) < period + 1:
-        return 50.0
-    gains, losses = 0, 0
-    for i in range(-period, 0):
-        diff = closes[i] - closes[i-1]
-        gains += max(diff, 0)
-        losses += max(-diff, 0)
-    avg_gain = gains / period
-    avg_loss = losses / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def calc_atr(klines: List[dict], period: int = 14) -> float:
-    if len(klines) < period + 1:
-        return (max(k["high"] for k in klines) - min(k["low"] for k in klines)) / len(klines)
-    trs = []
-    for i in range(-period, 0):
-        h, l, pc = klines[i]["high"], klines[i]["low"], klines[i-1]["close"]
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    return sum(trs) / len(trs)
-
-def calc_local_atr(klines: List[dict], n: int = 3) -> float:
-    """计算最近几根K线的局部波幅——用于动态调整止损乘数"""
-    if len(klines) < n:
-        return 0
-    ranges = [abs(k["high"] - k["low"]) for k in klines[-n:]]
-    return sum(ranges) / len(ranges)
 
 # ============================================================
 # 市场结构分析 — 改进：改用 EMA 排列判断趋势
@@ -371,6 +368,9 @@ def score_signal(
     near_resistance: bool = False,
     support_level: float = 0,
     resistance_level: float = 0,
+    fvg_info: dict = None,          # v5: FVG信息
+    vwap: float = 0,                # v5: VWAP
+    bb: dict = None,                # v5: 布林带
 ) -> Tuple[int, dict, List[str], List[str]]:
     """
     6维度评分系统（总分100）：
@@ -413,6 +413,16 @@ def score_signal(
         elif alignment["divergent"]:
             tf_score = 3
             risks.append("多框架方向分歧/背离")
+    # v5: VWAP方向确认
+    if vwap > 0:
+        if direction == "long" and price >= vwap:
+            tf_score = min(15, tf_score + 3)
+            reasons.append("价格在VWAP之上，偏强")
+        elif direction == "short" and price <= vwap:
+            tf_score = min(15, tf_score + 3)
+            reasons.append("价格在VWAP之下，偏弱")
+        elif direction == "long" and price < vwap * 0.99:
+            risks.append("价格远低于VWAP，做多逆势")
     score_detail["timeframe_alignment"] = tf_score
 
     # ——— 维度2：价格结构（25分）———
@@ -449,6 +459,10 @@ def score_signal(
     if structure and structure["direction"] == ("bullish" if direction == "long" else "bearish"):
         ps_score = min(ps_score + 3, 25)
         reasons.append("市场结构支持方向")
+    # v5: FVG 加成 — 机构入场印记
+    if fvg_info and fvg_info.get("in_fvg"):
+        ps_score = min(ps_score + FVG_SCORE_BONUS, MAX_PS)
+        reasons.append(f"FVG区域触发(+{FVG_SCORE_BONUS}分)")
     score_detail["price_structure"] = ps_score
 
     # ——— 维度3：成交量验证（20分）———
@@ -543,6 +557,18 @@ def score_signal(
     elif stop_pct <= 0.6:
         mm_score = min(mm_score + 1, 10)
         reasons.append("止损小(≤0.6%)")
+    # v5: 布林带位置
+    if bb and bb.get("bandwidth", 0) > 0:
+        bw = bb["bandwidth"]
+        pos = bb["position"]
+        if bw < 10:
+            reasons.append("布林带收窄，变盘前兆")
+        if direction == "long" and pos < 20:
+            mm_score = min(10, mm_score + 2)
+            reasons.append("触及下轨，反弹概率增加")
+        elif direction == "short" and pos > 80:
+            mm_score = min(10, mm_score + 2)
+            reasons.append("触及上轨，回调风险增加")
     score_detail["momentum"] = mm_score
 
     # ——— 总分 ———
@@ -557,7 +583,10 @@ def score_signal(
 def find_trading_signal(price: float, ticker_24h: dict,
                         klines_15m: List[dict], klines_1h: List[dict],
                         klines_4h: List[dict],
-                        max_stop_pct: float = 1.2) -> Tuple[Optional[dict], dict]:
+                        max_stop_pct: float = 1.2,
+                        market_context=None,        # v5: 市场背景
+                        market_regime=None,         # v5: 行情模式
+                        ofi_info: dict = None) -> Tuple[Optional[dict], dict]:  # v5: 订单流
     """返回 (signal, indicators) — signal=None 表示无信号, indicators 含计算指标供日志使用"""
     if not all([price, ticker_24h, klines_15m, klines_1h, klines_4h]):
         return None, {}
@@ -573,7 +602,9 @@ def find_trading_signal(price: float, ticker_24h: dict,
     structure_1h = detect_market_structure(klines_1h)
 
     ema21_1h = calc_ema(closes_1h, 21)
-    ema21_4h = calc_ema(closes_4h, 21)
+    # v5: 用已收盘的4h K线计算EMA（跳过当前未收盘的）
+    closed_4h = closes_4h[:-1] if len(closes_4h) > 21 else closes_4h
+    ema21_4h = calc_ema(closed_4h, 21)
 
     # 组装 indicators 供日志使用，避免 run_scan 重复计算
     ema9_1h = calc_ema(closes_1h, 9)
@@ -583,6 +614,19 @@ def find_trading_signal(price: float, ticker_24h: dict,
         "ema9_1h": ema9_1h, "ema21_1h": ema21_1h, "ema21_4h": ema21_4h,
         "structure_1h": structure_1h,
     }
+
+    # v5: 增强指标（FVG/VRVP/VWAP/布林带）
+    fvg_list_15m = detect_fvg(klines_15m)
+    indicators["fvg_count"] = len(fvg_list_15m)
+    vwap = calc_vwap(klines_1h) if len(klines_1h) >= 10 else calc_vwap(klines_15m)
+    bb = calc_bollinger_bands(klines_1h, 20, 2.0) if len(klines_1h) >= 20 else {}
+    indicators["vwap"] = vwap
+    indicators["bb"] = bb
+
+    # v5: 行情模式参数
+    regime_params = get_regime_params(market_regime) if market_regime else {}
+    _regime_min_rr = regime_params.get("min_rr", TRADING["min_rr_ratio"])
+    _regime_max_stop = regime_params.get("max_stop_pct", max_stop_pct)
 
     high_24h = ticker_24h["high"]
     low_24h = ticker_24h["low"]
@@ -595,7 +639,8 @@ def find_trading_signal(price: float, ticker_24h: dict,
     # ——— ATR 动态乘数 ———
     local_vol = calc_local_atr(klines_15m, 3)
     vol_ratio = local_vol / atr_1h if atr_1h > 0 else 1.0
-    atr_multiplier = max(0.3, min(0.8, vol_ratio * 0.5))
+    # v5: 止损乘数放宽 — 原0.15-0.4倍ATR太紧，现0.4-1.0倍ATR
+    atr_multiplier = max(0.4, min(1.0, vol_ratio * 0.6))
     base_stop_atr = atr_1h * atr_multiplier
 
     # ——— K线收盘确认 ———
@@ -613,18 +658,23 @@ def find_trading_signal(price: float, ticker_24h: dict,
     support_level = min(low_24h, sr_15m_low)
 
     if near_support and position_pct < 40:
-        stop_loss = support_level - base_stop_atr * 0.5
+        # v5: 止损放宽 — 原0.5倍ATR太紧，改1.5倍
+        stop_loss = support_level - base_stop_atr * 1.5
         stop_pct = (price - stop_loss) / price * 100 if price > stop_loss else 0.5
-        # 最小止损防止秒打：按max_stop(1.2%→0.5%, 1.5%→0.6%）
-        min_stop = round(0.4 * max_stop_pct, 2)
-        stop_pct = max(stop_pct, min_stop)
+        # 最小止损: 不低于0.6%（原0.48%）
+        min_stop = round(0.5 * max_stop_pct, 2)
+        stop_pct = max(stop_pct, min_stop, 0.6)
 
-        target = min(ema21_4h if price < ema21_4h else high_24h, high_24h)
-        target = max(target, price * 1.008)
+        # v5: 目标按固定R/R=2.5计算，不再依赖24h高位
+        target = price + stop_pct * 2.5 * price / 100
         target_pct = (target - price) / price * 100
         rr = target_pct / stop_pct if stop_pct > 0 else 0
 
-        if stop_pct < max_stop_pct and rr >= TRADING["min_rr_ratio"]:
+        # v5: FVG检测 — 看涨FVG匹配
+        in_fvg_long, matched_fvg_long = is_price_in_fvg(price, fvg_list_15m, "long", FVG_TOLERANCE)
+        fvg_info_long = {"in_fvg": in_fvg_long, "fvg": matched_fvg_long}
+
+        if stop_pct < _regime_max_stop and rr >= _regime_min_rr:
             # v4: 增强分析
             alignment = check_timeframe_alignment(klines_15m, klines_1h, "long")
             candle_analysis = analyze_candles(klines_15m, "long")
@@ -634,7 +684,15 @@ def find_trading_signal(price: float, ticker_24h: dict,
                 klines_15m, klines_1h, structure_1h, rsi_1h, atr_1h,
                 alignment=alignment, candle_analysis=candle_analysis,
                 near_support=near_support, support_level=support_level,
+                fvg_info=fvg_info_long,
+                vwap=vwap, bb=bb,
             )
+            # v5: 行情模式评分调整
+            if market_regime:
+                adj, adj_reason = get_score_adjustment(market_regime, "long")
+                if adj != 0:
+                    sig_score = max(0, min(100, sig_score + adj))
+                    reasons.append(adj_reason)
             if sig_score >= MIN_SCORE_DECENT:
                 candidates.append({
                     "direction": "long", "entry": price,
@@ -647,6 +705,8 @@ def find_trading_signal(price: float, ticker_24h: dict,
                     "pattern": "支撑位做多",
                     "score": sig_score, "score_detail": score_detail,
                     "reasons": reasons, "risks": risks,
+                    "fvg_info": fvg_info_long,  # v5
+                    "key_level": round(support_level, 1),  # v5: 关键位
                 })
 
     # ===== 做空信号 =====
@@ -667,7 +727,11 @@ def find_trading_signal(price: float, ticker_24h: dict,
         target_pct = (price - target) / price * 100
         rr = target_pct / stop_pct if stop_pct > 0 else 0
 
-        if stop_pct < max_stop_pct and rr >= TRADING["min_rr_ratio"]:
+        # v5: FVG检测 — 看跌FVG匹配
+        in_fvg_short, matched_fvg_short = is_price_in_fvg(price, fvg_list_15m, "short", FVG_TOLERANCE)
+        fvg_info_short = {"in_fvg": in_fvg_short, "fvg": matched_fvg_short}
+
+        if stop_pct < _regime_max_stop and rr >= _regime_min_rr:
             alignment = check_timeframe_alignment(klines_15m, klines_1h, "short")
             candle_analysis = analyze_candles(klines_15m, "short")
 
@@ -676,7 +740,15 @@ def find_trading_signal(price: float, ticker_24h: dict,
                 klines_15m, klines_1h, structure_1h, rsi_1h, atr_1h,
                 alignment=alignment, candle_analysis=candle_analysis,
                 near_resistance=near_resistance, resistance_level=resistance_level,
+                fvg_info=fvg_info_short,
+                vwap=vwap, bb=bb,
             )
+            # v5: 行情模式评分调整
+            if market_regime:
+                adj, adj_reason = get_score_adjustment(market_regime, "short")
+                if adj != 0:
+                    sig_score = max(0, min(100, sig_score + adj))
+                    reasons.append(adj_reason)
             if sig_score >= MIN_SCORE_DECENT:
                 candidates.append({
                     "direction": "short", "entry": price,
@@ -689,7 +761,52 @@ def find_trading_signal(price: float, ticker_24h: dict,
                     "pattern": "阻力位做空",
                     "score": sig_score, "score_detail": score_detail,
                     "reasons": reasons, "risks": risks,
+                    "fvg_info": fvg_info_short,  # v5
+                    "key_level": round(resistance_level, 1),  # v5: 关键位
                 })
+
+    # ===== 破位做空（下降趋势中跌破支撑顺势追空）=====
+    if regime_params.get("prefer_long") is False and position_pct < 30:
+        near_breakdown = price < low_24h * 1.01 or price < sr_15m_low * 1.005
+        if near_breakdown and rsi_1h < 50:
+            sl = price + base_stop_atr * 0.5
+            sp = max((sl - price) / price * 100, 0.6) if sl > price else 0.6
+            tg = price - sp * 2.5 * price / 100
+            r = (price - tg) / price / sp * 100 if sp > 0 else 0
+            if sp < _regime_max_stop and r >= _regime_min_rr:
+                candidates.append({
+                    "direction": "short", "entry": price,
+                    "entry_range": f"${int(price-10)} - ${int(price+10)}",
+                    "stop_loss": round(sl, 1), "target": round(tg, 1),
+                    "stop_pct": round(sp, 2), "target_pct": round((price-tg)/price*100, 2),
+                    "rr": round(r, 2), "pattern": "破位做空",
+                    "score": 65, "score_detail": {},
+                    "reasons": ["破位下跌+卖压确认"], "risks": [],
+                    "key_level": round(low_24h, 1),
+                })
+
+    # v5: 多策略路由（震荡策略+剥头皮策略）
+    extra = route_strategy(
+        regime_label=regime_params.get("label", "?"),
+        price=price, ticker=ticker_24h,
+        k15=klines_15m, k1h=klines_1h, k4h=klines_4h,
+        vrvp=calculate_vrvp(klines_4h if klines_4h else klines_1h, 50),
+        ofi_info=ofi_info if ofi_info else {"ofi": 0, "strength": 0},
+        rsi_1h=rsi_1h, rsi_15m=rsi_15m,
+        atr_1h=atr_1h, structure=structure_1h,
+        base_stop_atr=base_stop_atr,
+        regime_params=regime_params, market_regime=market_regime,
+    )
+    for s in extra:
+        s["signal_id"] = generate_signal_id()
+        s["fvg_info"] = {"in_fvg": False}
+        candidates.append(s)
+
+    # v5: 方向过滤 — 下降趋势不做多，上升趋势不做空
+    if regime_params.get("prefer_long") is False:
+        candidates = [c for c in candidates if c["direction"] != "long"]
+    elif regime_params.get("prefer_long") is True:
+        candidates = [c for c in candidates if c["direction"] != "short"]
 
     if candidates:
         candidates.sort(key=lambda s: s["score"] * s["rr"], reverse=True)
@@ -701,8 +818,21 @@ def find_trading_signal(price: float, ticker_24h: dict,
         trend_aligned = (direction == "long" and ema9 > ema21) or (direction == "short" and ema9 < ema21)
         trend_factor = TRADING.get("trend_aligned_mult", 1.3) if trend_aligned else TRADING.get("trend_against_mult", 0.7)
         best["trend_factor"] = trend_factor
-        best["amount_pct"] = calc_position_size(best["score"], atr_1h, price=price, trend_factor=trend_factor)
-        logger.info(f"候选:{len(candidates)} 最佳:{best['direction']} 评分{best['score']}/100 R/R={best['rr']} 仓位:{best['amount_pct']}%")
+        # v5: 应用去风险乘数 + 行情模式调整
+        derisk_mult = market_context.derisk_factor if market_context else 1.0
+        regime_size_mult = regime_params.get("size_multiplier", 1.0) if market_regime else 1.0
+        base_amount = calc_position_size(best["score"], atr_1h, price=price, trend_factor=trend_factor)
+        best["amount_pct"] = max(10, int(base_amount * derisk_mult * regime_size_mult))
+        best["derisk_factor"] = round(derisk_mult, 2)
+        best["regime"] = regime_params.get("label", "?") if market_regime else "?"
+        best["signal_id"] = generate_signal_id()
+        best["strategy_version"] = VERSION
+        best["quality_score"] = market_context.quality_score if market_context else 5.5
+        best["entry_min"] = round(support_level if best["direction"] == "long" else price, 1)
+        best["entry_max"] = round(price if best["direction"] == "long" else resistance_level, 1)
+        logger.info(f"候选:{len(candidates)} 最佳:{best['direction']} 评分{best['score']}/100 "
+                    f"R/R={best['rr']} 仓位:{best['amount_pct']}% "
+                    f"去风险x{derisk_mult:.1f} 模式{best['regime']}")
         return best, indicators
     return None, indicators
 
@@ -757,29 +887,79 @@ def save_chat_id(chat_id: int):
         f.write(str(chat_id))
     logger.info(f"chat_id {chat_id} 已持久化")
 
+def _fmt_price_cornix(p: float) -> str:
+    """智能格式化价格"""
+    if p >= 1000: return f"{p:.0f}"
+    elif p >= 10: return f"{p:.3f}"
+    elif p >= 1: return f"{p:.4f}"
+    else: return f"{p:.5f}"
+
 def send_cornix(signal: dict) -> bool:
-    """发送极简 Cornix 信号到频道——只传方向/价格/止损止盈"""
+    """发送 Cornix 标准格式信号"""
     channel = TELEGRAM.get("cornix_channel", "")
     if not channel:
         return False
-    direction = "LONG" if signal["direction"] == "long" else "SHORT"
-    symbol = signal.get("symbol", "BTCUSDT")
+    direction = "Long" if signal["direction"] == "long" else "Short"
+    pair = "#" + signal.get("symbol", "BTCUSDT").replace("USDT", "/USDT")
     entry = signal.get("entry", 0)
     stop = signal.get("stop_loss", 0)
     target = signal.get("target", 0)
-    # 杠杆和仓位由用户自己在 Cornix 面板设，信号不传
-    msg = (f"{direction} ${symbol}\nEntry: {int(entry)}\n"
-           f"Take-Profit: {int(target)}\nStop-Loss: {int(stop)}")
+    pattern = signal.get("pattern", "")
+
+    # 杠杆分级
+    score = signal.get("score", 60)
+    if "剥头皮" in pattern or "scalp" in pattern.lower():
+        lev = 30 if score >= 75 else (25 if score >= 60 else 20)
+    elif score >= 85: lev = 25
+    elif score >= 75: lev = 20
+    elif score >= 65: lev = 15
+    else: lev = 10
+    lev = min(lev, signal.get("leverage", 25))
+
+    fmt = _fmt_price_cornix
+    entry_min = entry * 0.997
+    entry_max = entry * 1.003
+    risk = abs(entry - stop)
+    sig_type = "Breakout" if "突破" in pattern else "Regular"
+
+    if signal["direction"] == "long":
+        tp1 = entry + risk * 0.5; tp2 = entry + risk * 1.0; tp3 = entry + risk * 1.5
+    else:
+        tp1 = entry - risk * 0.5; tp2 = entry - risk * 1.0; tp3 = entry - risk * 1.5
+
+    lines = [
+        f"{pair}",
+        "",
+        f"Exchanges: OKX Futures",
+        f"Signal Type: {sig_type} ({direction})",
+        f"Leverage: Isolated ({lev}X)",
+        "",
+        "Entry Zone:",
+        f"{fmt(entry_min)} - {fmt(entry_max)}",
+        "",
+        "Take-Profit Targets:",
+        f"1) {fmt(tp1)}",
+        f"2) {fmt(tp2)}",
+        f"3) {fmt(tp3)}",
+        "",
+        "Stop Targets:",
+        f"1) {fmt(stop)}",
+        "",
+        "Trailing Configuration:",
+        "Stop: Breakeven - Trigger: Target (1)",
+    ]
+    msg = chr(10).join(lines)
     token = TELEGRAM["bot_token"]
     result = api_post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         {"chat_id": channel, "text": msg}
     )
     if result:
-        logger.info(f"✅ Cornix: {direction} {symbol} @ ${entry:.0f}")
+        logger.info(f"✅ Cornix: {direction} {pair} @ {fmt(entry)} ({lev}X)")
         return True
     logger.warning("Cornix发送失败")
     return False
+
 
 def send_telegram(message: str) -> bool:
     token = TELEGRAM["bot_token"]
@@ -808,53 +988,96 @@ def send_telegram(message: str) -> bool:
 
 def format_signal(signal: dict) -> str:
     pair = signal.get("pair", "BTC")
-    emoji = "🟢" if signal["direction"] == "long" else "🔴"
-    dir_cn = "做多" if signal["direction"] == "long" else "做空"
+    entry = signal.get("entry", 0)
+    stop = signal.get("stop_loss", 0)
+    target = signal.get("target", 0)
+    stop_pct = signal.get("stop_pct", 0)
+    rr = signal.get("rr", 0)
+    score = signal.get("score", 0)
     amt = signal.get("amount_pct", 25)
+    lev = signal.get("leverage", 25)
+    reg = signal.get("regime", "?")
+    quality = signal.get("quality_score", 5.5)
+
+    dir_emoji = "🟢" if signal["direction"] == "long" else "🔴"
+    dir_en = "BUY" if signal["direction"] == "long" else "SELL"
+    dir_cn = "做多" if signal["direction"] == "long" else "做空"
 
     # 评分等级
-    score = signal.get("score", 0)
-    if score >= MIN_SCORE_STRONG:
-        level = "🔥 强信号"
-    elif score >= MIN_SCORE_GOOD:
-        level = "✅ 好信号"
-    elif score >= MIN_SCORE_DECENT:
-        level = "⚠️ 一般信号"
-    else:
-        level = "❌ 弱信号"
+    if score >= MIN_SCORE_STRONG: level = "🔥 强信号"
+    elif score >= MIN_SCORE_GOOD: level = "✅ 好信号"
+    elif score >= MIN_SCORE_DECENT: level = "⚠️ 一般信号"
+    else: level = "❌ 弱信号"
 
-    # 评分明细
-    sd = signal.get("score_detail", {})
-    detail_str = (
-        f"  ├ 多框架对齐 {sd.get('timeframe_alignment',0)}/15\n"
-        f"  ├ 价格结构 {sd.get('price_structure',0)}/25\n"
-        f"  ├ 成交量验证 {sd.get('volume_verification',0)}/20\n"
-        f"  ├ K线形态 {sd.get('candle_pattern',0)}/15\n"
-        f"  ├ 风险收益比 {sd.get('risk_reward',0)}/15\n"
-        f"  └ 动能背离 {sd.get('momentum',0)}/10"
+    # 杠杆推荐（基于行情评分）
+    if quality >= 7: rec_lev = f"{lev}x"; rec_note = "行情优质，正常杠杆"
+    elif quality >= 5: rec_lev = f"{lev}x"; rec_note = "行情中性，建议降低杠杆"
+    else: rec_lev = f"10-15x"; rec_note = "行情偏差，轻仓严损"
+
+    # 关键位
+    entry_min = signal.get("entry_min", entry * 0.997)
+    entry_max = signal.get("entry_max", entry * 1.003)
+    key_level = signal.get("key_level", entry)
+
+    # 条件判断文本
+    if signal["direction"] == "long":
+        condition = (
+            f"✅ 入场：${entry_min:.0f} - ${entry_max:.0f}\n"
+            f"🛑 止损：${stop:.0f}（{stop_pct:.2f}%）\n"
+            f"🎯 目标：${target:.0f}（+{signal.get('target_pct',0):.2f}%）\n"
+            f"📊 R/R：{rr}:1\n"
+            f"⚡ 杠杆：{rec_lev}（{rec_note}）\n"
+            f"📈 模式：{reg}"
+        )
+        plan = (
+            f"📋 *交易计划*\n"
+            f"方案A（激进）：回踩${entry_min:.0f}附近轻仓试多，"
+            f"止损${stop:.0f}，目标${target:.0f}\n"
+            f"方案B（稳健）：15m收盘站上${entry_max:.0f}确认后入场\n"
+            f"⏱️ 时效：15m级别信号，持有1-4h"
+        )
+    else:
+        condition = (
+            f"✅ 入场：${entry_min:.0f} - ${entry_max:.0f}\n"
+            f"🛑 止损：${stop:.0f}（{stop_pct:.2f}%）\n"
+            f"🎯 目标：${target:.0f}（-{signal.get('target_pct',0):.2f}%）\n"
+            f"📊 R/R：{rr}:1\n"
+            f"⚡ 杠杆：{rec_lev}（{rec_note}）\n"
+            f"📉 模式：{reg}"
+        )
+        plan = (
+            f"📋 *交易计划*\n"
+            f"方案A（激进）：反弹${entry_min:.0f}附近轻仓试空，"
+            f"止损${stop:.0f}，目标${target:.0f}\n"
+            f"方案B（稳健）：15m收盘跌破${entry_max:.0f}确认后入场\n"
+            f"⏱️ 时效：15m级别信号，持有1-4h"
+        )
+
+    # 关键位表格
+    key_levels = (
+        f"📌 *关键位*\n"
+        f"压力区 ${target:.0f}\n"
+        f"关键位 ${key_level:.0f}\n"
+        f"支撑区 ${stop:.0f}"
     )
 
+    # 理由
     reasons = signal.get("reasons", [])
-    # 去掉末尾的总分理由
     display_reasons = [r for r in reasons if not r.startswith("6维度评分")]
-    reasons_str = "\n".join(f"  ✅ {r}" for r in display_reasons[:5])
-    risks_str = "\n".join(f"  ⚠️ {r}" for r in signal.get("risks", [])[:5]) if signal.get("risks") else "  无明显风险"
+    reasons_str = "\n".join(f"• {r}" for r in display_reasons[:4])
+    risks_str = "\n".join(f"⚠️ {r}" for r in signal.get("risks", [])[:3]) if signal.get("risks") else ""
 
     return (
-        f"📊 *Cipher {pair} 超短线信号*\n"
-        f"{level} | 方向：{dir_cn} {emoji}\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"入场：{signal['entry_range']}\n"
-        f"当前：${signal['entry']:.0f}\n"
-        f"止损：${signal['stop_loss']:.0f}（{signal['stop_pct']:.2f}%）\n"
-        f"目标：${signal['target']:.0f}（+{signal['target_pct']:.2f}%）\n"
-        f"盈亏比：{signal['rr']}:1\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"评分：{score}/100 | 仓位：{amt}% | {signal['pattern']}\n\n"
-        f"*评分明细：*\n{detail_str}\n\n"
-        f"*关键理由：*\n{reasons_str}\n\n"
-        f"*风险提示：*\n{risks_str}\n\n"
-        f"杠杆{signal.get('leverage', 25)}x | 止损小，盈亏比高 ✅"
+        f"📊 *Cipher {pair}* {dir_emoji}\n"
+        f"> {dir_cn} | 评分{score}/100 | 行情感知 {quality}/10\n\n"
+        f"━━━━━ 入场方案 ━━━━━\n"
+        f"{condition}\n\n"
+        f"━━━━━ 计划 ━━━━━\n"
+        f"{plan}\n\n"
+        f"━━━━━ 关键位 ━━━━━\n"
+        f"{key_levels}\n\n"
+        f"理由：{reasons_str}\n"
+        f"{('风险：'+risks_str) if risks_str else ''}"
     )
 
 # ============================================================
@@ -866,14 +1089,97 @@ def fetch_pair(symbol: str, pconf: dict):
     ticker = get_24h_ticker(symbol)
     if not price or not ticker:
         return symbol, pconf, None, None
-    k15 = get_klines(symbol, "15m", 30)
-    k1h = get_klines(symbol, "1h", 30)
-    k4h = get_klines(symbol, "4h", 24)
+    k15 = get_klines(symbol, "15m", FETCH_LIMITS.get("15m", 100))
+    k1h = get_klines(symbol, "1h", FETCH_LIMITS.get("1h", 96))
+    k4h = get_klines(symbol, "4h", FETCH_LIMITS.get("4h", 100))
     return symbol, pconf, (price, ticker, k15, k1h, k4h), None if all([k15, k1h, k4h]) else "K线数据失败"
 
 def run_scan():
-    logger.info("=" * 50)
-    logger.info("Cipher v4 多币种扫描")
+    logger.info("=" * 60)
+    logger.info("Cipher v5 多币种扫描 — SMC增强版")
+
+    # ─── 1. 全局市场背景分析 ───
+    btc_k1h = get_klines("BTCUSDT", "1h", FETCH_LIMITS.get("1h", 96))
+    btc_k4h = get_klines("BTCUSDT", "4h", FETCH_LIMITS.get("4h", 100))
+    # v5: OI/资金费率分析
+    btc_contract = get_contract_data("BTCUSDT")
+    market_ctx = evaluate_market_context(btc_k1h, btc_k4h, oi_data=btc_contract)
+    regime = classify_regime(btc_k4h)
+    regime_label = get_regime_params(regime).get("label", "?")
+    status_icon = "!!" if market_ctx.derisk else "OK"
+    # OI信息
+    oi_sig = market_ctx.oi_info.get("signal", "neutral")
+    oi_str = f" | OI={market_ctx.oi_info.get('oi_trend','?')}"
+    if market_ctx.oi_info.get("funding_rate"):
+        oi_str += f" 费率={market_ctx.oi_info['funding_rate']:.6f}"
+    # v5: 订单流分析
+    btc_ofi = analyze_order_flow("BTCUSDT")
+    ofi_str = f" | OFI={btc_ofi.get('ofi',0):+.2f}" if btc_ofi.get('ofi') else ""
+    if btc_ofi.get('whale_alert'):
+        ofi_str += " 🐋大单"
+    # v5: VRVP成交量分布
+    btc_vrvp = calculate_vrvp(btc_k4h if btc_k4h else btc_k1h, 50)
+    vrvp_str = ""
+    if btc_vrvp:
+        v = btc_vrvp
+        vrvp_str = f" | POC ${v['poc']}"
+        if v['current_position'] == 'near_poc': vrvp_str += "🎯"
+        elif v['current_position'] == 'above_va': vrvp_str += "📈"
+        elif v['current_position'] == 'below_va': vrvp_str += "📉"
+        logger.info(f"  VRVP: POC=${v['poc']} 价值区=${v['va_low']}-${v['va_high']} {describe_vrvp(btc_vrvp).split('|')[-1]}")
+
+    # v5: 宏观/消息面数据
+    macro_ctx = MacroContext().evaluate()
+    macro_str = f" | 恐慌{macro_ctx.fear_greed}"
+    if macro_ctx.dxy:
+        macro_str += f" | DXY={macro_ctx.dxy}"
+    if macro_ctx.derisk:
+        market_ctx.derisk = True
+        market_ctx.derisk_factor = min(market_ctx.derisk_factor, macro_ctx.derisk_factor)
+    for r in macro_ctx.reasons:
+        if r not in market_ctx.reasons:
+            market_ctx.reasons.append(r)
+
+    # v5: 初始化策略路由
+    strategy_router = StrategyRouter()
+    bb = calc_bollinger_bands(btc_k1h, 20, 2.0) if btc_k1h and len(btc_k1h) >= 20 else {}
+    _, market_mode = strategy_router.route(regime_label, market_ctx.btc_rsi, bb, btc_ofi, [])
+
+    logger.info(
+        f"市场背景: [{status_icon}] | 乘数={market_ctx.derisk_factor:.1f} | "
+        f"趋势={market_ctx.btc_trend} | "
+        f"RSI={market_ctx.btc_rsi:.0f} | 行情感知 {market_ctx.quality_score}/10 | "
+        f"模式={regime_label}{oi_str}{ofi_str}{vrvp_str}{macro_str}"
+    )
+
+    # 严重去风险 → 暂停交易
+    if market_ctx.derisk and market_ctx.derisk_factor < CONTEXT_CONFIG.get("derisk_factor_min", 0.3):
+        warn = (f"⚠️ *Cipher 暂停交易 — 市场风险过高*\n"
+                f"{chr(10).join(f'• {r}' for r in market_ctx.reasons[:3])}")
+        logger.warning("市场风险过高，暂停交易: %s", "; ".join(market_ctx.reasons))
+        send_telegram(warn)
+        return
+
+    # v5: 初始化风控引擎
+    risk_engine = RiskEngine()
+    risk_passed, risk_violations = risk_engine.check_all({})
+    logger.info(f"风控状态: {'✅' if risk_passed else '⚠️'} 日盈亏={risk_engine.state['daily_pnl']:.1f}% | "
+                f"连亏={risk_engine.state['consecutive_losses']} | "
+                f"熔断={'⚠️' if risk_engine.state['loss_limit_hit'] else '✅'}")
+
+    # v5: 禁交易时段检查
+    in_blackout, blackout_reason = check_event_blackout()
+    if in_blackout:
+        logger.warning(f"⏸️ 禁交易: {blackout_reason}")
+        send_telegram(f"⏸️ *禁交易时段*\n{blackout_reason}\n\n自动恢复交易后正常扫描")
+        return
+
+    # v5: 系统健康检查
+    health = check_health()
+    if not health.get("binance_api"):
+        logger.error("❌ Binance API 异常，暂停交易")
+        send_telegram("⚠️ *Binance API 异常*\n暂停交易，等待恢复")
+        return
 
     signals_found = 0
     enabled_pairs = [(k, v) for k, v in PAIRS.items() if v.get("enabled", False)]
@@ -884,25 +1190,37 @@ def run_scan():
         results = {}
         for future in as_completed(futures):
             sym, pconf, data, err = future.result()
+            ok = not err and data is not None
             if err or not data:
                 logger.warning(f"{pconf.get('name', sym)}: {err or '数据获取失败'}")
             results[sym] = (pconf, data)
-            if not err:
+            if ok:
                 pair_name = pconf.get("name", sym)
                 price, ticker, k15, k1h, k4h = data
                 logger.info(f"  {pair_name} ${price:,.2f} | 24h ${ticker['low']:,.0f}-${ticker['high']:,.0f} {ticker['change_pct']:+.2f}%")
 
     # 逐个币种分析信号
     for symbol, pconf in enabled_pairs:
-        if symbol not in results or not results[symbol][1]:
+        if symbol not in results:
             continue
         pconf, data = results[symbol]
+        if not data:
+            continue
+        # 检查K线数据完整性
+        _, _, k15, k1h, k4h = data
+        if not all([k15, k1h, k4h]):
+            logger.warning(f"  {pconf.get('name', symbol)}: K线数据不完整，跳过")
+            continue
+
         pair_name = pconf.get("name", symbol)
         price, ticker, k15, k1h, k4h = data
 
         pair_max_stop = pconf.get("max_stop_pct", 1.2)
         signal, indicators = find_trading_signal(price, ticker, k15, k1h, k4h,
-                                                   max_stop_pct=pair_max_stop)
+                                                   max_stop_pct=pair_max_stop,
+                                                   market_context=market_ctx,
+                                                   market_regime=regime,
+                                                   ofi_info=btc_ofi)
 
         ind = indicators
         if ind:
@@ -910,71 +1228,121 @@ def run_scan():
             logger.info(f"  结构: {ind['structure_1h']['structure']} | EMA9/21 1h: {'多头' if ind['ema9_1h']>ind['ema21_1h'] else '空头'}")
 
         if signal:
-            score = signal.get("score", 0)
-            min_score = pconf.get("min_score", MIN_SCORE_GOOD)
-            if score < min_score:
-                logger.info(f"  ⏸️ 信号评分{score}<{min_score}({pair_name}最低要求)，跳过")
-                continue
-
-            # 信号去重：同币种同方向30分钟内不重复发
-            last_sig = {}
-            if os.path.exists(LAST_SIGNAL_FILE):
-                try:
-                    with open(LAST_SIGNAL_FILE) as f:
-                        last_sig = json.load(f)
-                except: pass
-            if last_sig.get("pair") == pair_name and last_sig.get("direction") == signal["direction"]:
-                price_diff = abs(last_sig.get("entry", 0) - price) / price * 100
-                time_diff = datetime.now(timezone.utc).timestamp() - last_sig.get("ts", 0)
-                if price_diff < 0.3 and time_diff < SIGNAL_COOLDOWN_SEC:
-                    logger.info(f"  ⏸️ 去重: 同{pair_name}同方向价差{price_diff:.2f}% 距上次{int(time_diff//60)}分，跳过")
-                    continue
-            logger.info(f"  ✅ 信号! {signal['direction']} 评分{score}/100 R/R={signal['rr']}")
-
-            # 给信号打上pair标记
-            signal["pair"] = pair_name
-            signal["symbol"] = symbol
-
-            # 验证器
-            claims_for_validation = {
-                "current_price": price,
-                "entry": signal.get("entry"),
-                "stop_loss": signal.get("stop_loss"),
-                "target": signal.get("target"),
-                "stop_pct": signal.get("stop_pct"),
-                "rr": signal.get("rr"),
-                "rsi": ind.get("rsi_1h", 50) if ind else 50,
-                "direction": signal.get("direction"),
-                "pattern": signal.get("pattern", ""),
-                "score": score,
-                "score_detail": signal.get("score_detail", {}),
-            }
-            vresult = validate_analysis(claims_for_validation,
-                                         {"price_actual": price, "closes_15m": [k["close"] for k in k15]})
-            if not vresult["passed"]:
-                logger.error(f"  ❌ 验证器拦截: {vresult['summary']}")
-                send_telegram(f"⚠️ {pair_name} *验证器拦截信号*\n{vresult['summary']}\n\n信号未发送")
-                continue
-
-            for key, val in vresult.get("corrections", {}).items():
-                if key == "rr":
-                    signal["rr"] = val
-                elif key == "stop_pct":
-                    signal["stop_pct"] = val
-
-            # 调整杠杆显示
-            lev = pconf.get("leverage", 25)
-            signal["leverage"] = lev
-
-            log_trade(signal, "sent")
             try:
-                with open(LAST_SIGNAL_FILE, "w") as f:
-                    json.dump({"pair": pair_name, "direction": signal["direction"],
-                               "entry": price, "ts": datetime.now(timezone.utc).timestamp()}, f)
-            except: pass
-            send_telegram(format_signal(signal))
-            send_cornix(signal)  # Cornix 自动执行
-            signals_found += 1
+                score = signal.get("score", 0)
+                min_score = pconf.get("min_score", MIN_SCORE_GOOD)
+                if score < min_score:
+                    logger.info(f"  ⏸️ 信号评分{score}<{min_score}({pair_name}最低要求)，跳过")
+                    continue
+
+                # 信号去重：同币种同方向30分钟内不重复发
+                last_sig = {}
+                if os.path.exists(LAST_SIGNAL_FILE):
+                    try:
+                        with open(LAST_SIGNAL_FILE) as f:
+                            last_sig = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"读取去重文件失败: {e}")
+                if last_sig.get("pair") == pair_name and last_sig.get("direction") == signal["direction"]:
+                    price_diff = abs(last_sig.get("entry", 0) - price) / price * 100
+                    time_diff = datetime.now(timezone.utc).timestamp() - last_sig.get("ts", 0)
+                    if price_diff < 0.3 and time_diff < SIGNAL_COOLDOWN_SEC:
+                        logger.info(f"  ⏸️ 去重: 同{pair_name}同方向价差{price_diff:.2f}% 距上次{int(time_diff//60)}分，跳过")
+                        continue
+                # v5: 多信号投票引擎
+                vote_dir, vote_conf, vote_reasons, score_boost = evaluate_vote(
+                    signal_score=score,
+                    signal_direction=signal["direction"],
+                    signal_rr=signal["rr"],
+                    fvg_info=signal.get("fvg_info", {}),
+                    oi_info=market_ctx.oi_info,
+                    ofi_info=btc_ofi,
+                    regime_label=regime_label,
+                    vrvp_info=btc_vrvp,
+                )
+                # 投票明确反对 -> 跳过
+                if vote_dir is None and score_boost <= -5:
+                    logger.info(f"  ⏸️ 多信号否决: {', '.join(vote_reasons[:2])}")
+                    continue
+                # 应用评分加成
+                orig_score = score
+                score = max(10, min(100, score + score_boost))
+                signal["score"] = score
+                if score != orig_score:
+                    signal["score_detail"]["vote_boost"] = score_boost
+
+                logger.info(f"  ✅ 信号! {signal['direction']} 评分{score}/100 R/R={signal['rr']}")
+
+                # 给信号打上pair标记
+                signal["pair"] = pair_name
+                signal["symbol"] = symbol
+
+                # 验证器
+                claims_for_validation = {
+                    "current_price": price,
+                    "entry": signal.get("entry"),
+                    "stop_loss": signal.get("stop_loss"),
+                    "target": signal.get("target"),
+                    "stop_pct": signal.get("stop_pct"),
+                    "rr": signal.get("rr"),
+                    "rsi": ind.get("rsi_1h", 50) if ind else 50,
+                    "direction": signal.get("direction"),
+                    "pattern": signal.get("pattern", ""),
+                    "score": score,
+                    "score_detail": signal.get("score_detail", {}),
+                }
+                vresult = validate_analysis(claims_for_validation,
+                                             {"price_actual": price, "closes_15m": [k["close"] for k in k15]})
+                if not vresult["passed"]:
+                    logger.error(f"  ❌ 验证器拦截: {vresult['summary']}")
+                    send_telegram(f"⚠️ {pair_name} *验证器拦截信号*\n{vresult['summary']}\n\n信号未发送")
+                    continue
+
+                for key, val in vresult.get("corrections", {}).items():
+                    if key == "rr":
+                        signal["rr"] = val
+                    elif key == "stop_pct":
+                        signal["stop_pct"] = val
+
+                # 调整杠杆显示
+                lev = pconf.get("leverage", 25)
+                signal["leverage"] = lev
+
+                # v5: 风控最终审核
+                risk_passed, risk_violations = risk_engine.check_all(signal, btc_ofi)
+                if not risk_passed:
+                    reason = "; ".join(risk_violations[:3])
+                    logger.error(f"  ❌ 风控拦截: {reason}")
+                    send_telegram(f"⚠️ {pair_name} *风控拦截*\n{reason}")
+                    continue
+
+                # v5: 风控自动降级（在check_all之后，因为degrade_factor由check_all设置）
+                degrade = signal.get("degrade_factor", 1.0)
+                if degrade < 1.0:
+                    old_amt = signal.get("amount_pct", 0)
+                    signal["amount_pct"] = max(10, int(old_amt * degrade))
+                    logger.info(f"  ⏸️ 自动降级: 仓位 {old_amt}% → {signal['amount_pct']}% (x{degrade})")
+
+                # v5: signal_id 防重复执行
+                sig_id = signal.get("signal_id", "")
+                if sig_id and is_signal_executed(sig_id):
+                    logger.warning(f"  ⏸️ signal_id {sig_id} 已执行过，跳过")
+                    continue
+                if sig_id:
+                    mark_signal_executed(sig_id)
+
+                log_trade(signal, "sent")
+                try:
+                    with open(LAST_SIGNAL_FILE, "w") as f:
+                        json.dump({"pair": pair_name, "direction": signal["direction"],
+                                   "entry": price, "ts": datetime.now(timezone.utc).timestamp()}, f)
+                except Exception as e:
+                    logger.error(f"写入去重文件失败: {e}")
+                send_telegram(format_signal(signal))
+                send_cornix(signal)  # Cornix 自动执行
+                signals_found += 1
+            except Exception as e:
+                logger.error(f"  ❌ 信号处理异常: {e}", exc_info=True)
 
     if signals_found == 0:
         logger.info("本次无信号")
@@ -1102,4 +1470,14 @@ if __name__ == "__main__":
     elif mode == "review": run_review()
     elif mode == "log": run_log()
     elif mode == "history": run_log()
-    else: print(f"未知: {mode}，可用: scan/summary/review/log")
+    elif mode == "report":
+        report = generate_daily_report()
+        print(report)
+        send_telegram(report)
+    elif mode == "report-only":
+        print(generate_daily_report())
+    elif mode == "health":
+        h = check_health()
+        for k, v in h.items():
+            print(f"{k}: {'✅' if v else '❌'}")
+    else: print(f"未知: {mode}，可用: scan/summary/review/log/report/health")

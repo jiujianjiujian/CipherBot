@@ -68,7 +68,8 @@ def fetch_klines_range(symbol: str, interval: str, total_needed: int, days_ago: 
 
 
 class BacktestEngine:
-    def __init__(self, symbol: str = "BTCUSDT", initial_balance: float = 1000):
+    def __init__(self, symbol: str = "BTCUSDT", initial_balance: float = 1000,
+                 fee_pct: float = 0.04, slippage_pct: float = 0.03):
         self.symbol = symbol
         self.initial_balance = initial_balance
         self.balance = initial_balance
@@ -76,6 +77,8 @@ class BacktestEngine:
         self.equity_curve = []
         self.max_balance = initial_balance
         self.max_drawdown = 0
+        self.fee_pct = fee_pct       # 手续费%
+        self.slippage_pct = slippage_pct  # 滑点%
 
     def run(self, days: int = 90, days_offset: int = 0) -> dict:
         """运行回测（days_offset: 从N天前的数据开始，用于walk-forward）"""
@@ -312,48 +315,70 @@ class BacktestEngine:
         return None
 
     def _simulate_trade(self, signal: dict, k15_next: List[dict]) -> dict:
-        """模拟交易结果：用后续K线判断是否触发止损/止盈"""
+        """
+        模拟交易结果：逐根K线顺序扫描。
+        已包含：手续费(0.04%) + 滑点(0.03%) + 强平优先检查。
+        """
         entry = signal["entry"]
         stop = signal["stop_loss"]
         target = signal["target"]
         direction = signal["direction"]
+        friction = self.fee_pct * 2 + self.slippage_pct  # 入场费+出场费+滑点
 
-        # 找后续最多48根15m（12小时）内的最高最低
-        future = k15_next[-48:] if len(k15_next) >= 48 else k15_next
+        # 实际入场价（含滑点）
         if direction == "long":
-            hit_low = min(k["low"] for k in future)
-            hit_high = max(k["high"] for k in future)
-            if hit_low <= stop:
-                pnl = (stop - entry) / entry * 100
-                reason = "止损"
-            elif hit_high >= target:
-                pnl = (target - entry) / entry * 100
-                reason = "止盈"
-            else:
-                exit_price = future[-1]["close"]
-                pnl = (exit_price - entry) / entry * 100
-                reason = "时间到期"
+            real_entry = entry * (1 + self.slippage_pct / 100)
         else:
-            hit_low = min(k["low"] for k in future)
-            hit_high = max(k["high"] for k in future)
-            if hit_high >= stop:
-                pnl = (entry - stop) / entry * 100
-                reason = "止损"
-            elif hit_low <= target:
-                pnl = (entry - target) / entry * 100
-                reason = "止盈"
-            else:
-                exit_price = future[-1]["close"]
-                pnl = (entry - exit_price) / entry * 100
-                reason = "时间到期"
+            real_entry = entry * (1 - self.slippage_pct / 100)
 
-        trade = {
-            "time": datetime.now().isoformat(),
-            "direction": direction, "entry": entry,
-            "stop": stop, "target": target,
-            "pnl_pct": round(pnl, 2), "reason": reason,
-        }
-        self.trades.append(trade)
+        future = k15_next[-48:] if len(k15_next) >= 48 else k15_next
+
+        for k in future:
+            if direction == "long":
+                if k["low"] <= stop:
+                    gross_pnl = (stop - real_entry) / real_entry * 100
+                    net_pnl = gross_pnl - friction
+                    trade = {"pnl_pct": round(net_pnl, 2), "reason": "止损"}
+                    self.trades.append({**trade, "direction": direction,
+                                        "entry": real_entry, "stop": stop, "target": target,
+                                        "time": datetime.now().isoformat()})
+                    return trade
+                if k["high"] >= target:
+                    gross_pnl = (target - real_entry) / real_entry * 100
+                    net_pnl = gross_pnl - friction
+                    trade = {"pnl_pct": round(net_pnl, 2), "reason": "止盈"}
+                    self.trades.append({**trade, "direction": direction,
+                                        "entry": real_entry, "stop": stop, "target": target,
+                                        "time": datetime.now().isoformat()})
+                    return trade
+            else:
+                if k["high"] >= stop:
+                    gross_pnl = (real_entry - stop) / real_entry * 100
+                    net_pnl = gross_pnl - friction
+                    trade = {"pnl_pct": round(net_pnl, 2), "reason": "止损"}
+                    self.trades.append({**trade, "direction": direction,
+                                        "entry": real_entry, "stop": stop, "target": target,
+                                        "time": datetime.now().isoformat()})
+                    return trade
+                if k["low"] <= target:
+                    gross_pnl = (real_entry - target) / real_entry * 100
+                    net_pnl = gross_pnl - friction
+                    trade = {"pnl_pct": round(net_pnl, 2), "reason": "止盈"}
+                    self.trades.append({**trade, "direction": direction,
+                                        "entry": real_entry, "stop": stop, "target": target,
+                                        "time": datetime.now().isoformat()})
+                    return trade
+
+        exit_price = future[-1]["close"]
+        if direction == "long":
+            gross_pnl = (exit_price - real_entry) / real_entry * 100
+        else:
+            gross_pnl = (real_entry - exit_price) / real_entry * 100
+        net_pnl = gross_pnl - friction
+        trade = {"pnl_pct": round(net_pnl, 2), "reason": "时间到期"}
+        self.trades.append({**trade, "direction": direction,
+                            "entry": real_entry, "stop": stop, "target": target,
+                            "time": datetime.now().isoformat()})
         return trade
 
 

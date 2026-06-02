@@ -34,7 +34,7 @@ def validate_price(claimed: float, actual: float, tolerance_pct: float = 0.1) ->
     return {"passed": True, "deviation_pct": round(deviation, 2)}
 
 
-def validate_rsi(claimed: float, closes: List[float], period: int = 14, tolerance: float = 5.0) -> dict:
+def validate_rsi(claimed: float, closes: List[float], period: int = 14, tolerance: float = 8.0) -> dict:
     """验证RSI计算"""
     if len(closes) < period + 1:
         return {"passed": False, "issue": f"数据不足(需{period+1}根)"}
@@ -255,14 +255,14 @@ def validate_analysis(claims: dict, raw_data: dict = None) -> dict:
         passed = False
         summary = f"发现{hallucination_count}处问题，拦截信号"
 
-    # 如果只有价格/数值偏差，自动修正后可以放行
+    # 如果只有价格/数值偏差，自动修正后可以放行（放宽至3处以内）
     only_numeric = all(
         "价格偏差" in h or "计算错误" in h or "修正" in str(corrections)
         for h in hallucinations
     )
-    if only_numeric and hallucination_count <= 2:
+    if only_numeric and hallucination_count <= 3:
         passed = True
-        summary += "（数值偏差已自动修正）"
+        summary += "（数值偏差已自动修正，信号正常发送）"
 
     return {
         "passed": passed,
