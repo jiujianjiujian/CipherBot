@@ -20,7 +20,9 @@ class Regime(Enum):
     SLOW_BULL = "slow_bull"
     FAST_PUMP = "fast_pump"
     FAST_DUMP = "fast_dump"
-    RANGING = "ranging"
+    RANGE_WIDE = "range_wide"       # 宽震荡 可交易
+    RANGE_NARROW = "range_narrow"   # 窄震荡 少做
+    CHOPPY = "choppy"               # 乱震荡 禁止交易
     VOLATILE = "volatile"
     UNKNOWN = "unknown"
 
@@ -62,14 +64,23 @@ REGIME_PARAMS: Dict[Regime, dict] = {
         "score_bonus_short": 7,        # 做空加成7分（原5分）
         "score_penalty_long": 3,       # 做多仅扣3分（原8分）— 允许优质超卖反弹
     },
-    Regime.RANGING: {
-        "label": "⏸️ 横盘震荡",
-        "size_multiplier": 0.8,        # 减仓20%（原30%）
-        "min_rr": 2.0,                 # 原2.5→2.0
-        "max_stop_pct": 0.6,           # 紧止损不变
+    Regime.RANGE_WIDE: {
+        "label": "↔️ 宽震荡",
+        "size_multiplier": 0.8, "min_rr": 2.0, "max_stop_pct": 0.45,
         "prefer_long": None,
-        "score_bonus_long": 0,
-        "score_penalty_short": 0,
+        "score_bonus_long": 0, "score_penalty_short": 0,
+    },
+    Regime.RANGE_NARROW: {
+        "label": "🔹 窄震荡",
+        "size_multiplier": 0.5, "min_rr": 2.5, "max_stop_pct": 0.35,
+        "prefer_long": None,
+        "score_bonus_long": 0, "score_penalty_short": 0,
+    },
+    Regime.CHOPPY: {
+        "label": "❌ 乱震荡",
+        "size_multiplier": 0.0, "min_rr": 99, "max_stop_pct": 0.1,
+        "prefer_long": None,
+        "score_bonus_long": 0, "score_penalty_short": 0,
     },
     Regime.FAST_PUMP: {
         "label": "🚀 暴涨行情",
@@ -171,8 +182,15 @@ def classify_regime(klines_4h: Optional[List[dict]], klines_15m: Optional[List[d
             return Regime.SLOW_BULL
         return Regime.TRENDING_BULL
 
-    # ─── Step 4: 其余情况 → 震荡 ───
-    return Regime.RANGING
+    # ─── Step 4: 震荡分类（宽/窄/乱）───
+    range_width = abs(ema20 - ema50) / price * 100
+    if atr_pct > 1.0:
+        return Regime.CHOPPY  # 高波动+无趋势=乱震荡
+    if range_width < 0.3:
+        return Regime.CHOPPY  # EMA20/50几乎重合=乱震荡
+    if range_width < 0.8:
+        return Regime.RANGE_NARROW  # 窄震荡
+    return Regime.RANGE_WIDE  # 宽震荡可交易
 
 
 def get_regime_params(regime: Optional[Regime]) -> dict:

@@ -23,7 +23,9 @@ class MarketMode(Enum):
     SLOW_BULL = "慢涨行情"
     FAST_PUMP = "暴涨行情"
     FAST_DUMP = "暴跌行情"
-    RANGE = "区间震荡"
+    RANGE_WIDE = "宽震荡"
+    RANGE_NARROW = "窄震荡"
+    CHOPPY = "乱震荡"
     BREAKOUT = "突破"
     FAKEOUT = "假突破"
     SCALP_ONLY = "只适合剥头皮"
@@ -55,9 +57,17 @@ MODE_STRATEGY_MAP = {
         "primary": ["fakeout_reversal_long", "breakout_retest_short"],
         "disabled": ["trend_short", "range_short", "scalp_ofi_short"],
     },
-    MarketMode.RANGE: {
-        "primary": ["range", "vwap_reversion"],
-        "disabled": ["trend"],
+    MarketMode.RANGE_WIDE: {
+        "primary": ["range", "vwap_reversion", "fakeout_reversal"],
+        "disabled": ["trend", "breakout_retest"],
+    },
+    MarketMode.RANGE_NARROW: {
+        "primary": ["range"],
+        "disabled": ["trend", "breakout_retest", "scalp_ofi"],
+    },
+    MarketMode.CHOPPY: {
+        "primary": [],
+        "disabled": ["trend", "range", "breakout_retest", "scalp_ofi", "vwap_reversion"],
     },
     MarketMode.BREAKOUT: {
         "primary": ["breakout_retest", "volatility_expansion"],
@@ -247,6 +257,12 @@ def detect_market_mode(regime_label: str, rsi_1h: float,
     bb_bw = bb.get("bandwidth", 100) if bb else 100
     ofi_val = abs(ofi.get("ofi", 0)) if ofi else 0
 
+    if "宽震荡" in regime_label:
+        return MarketMode.RANGE_WIDE
+    if "窄震荡" in regime_label:
+        return MarketMode.RANGE_NARROW
+    if "乱震荡" in regime_label:
+        return MarketMode.CHOPPY
     if "暴涨" in regime_label:
         return MarketMode.FAST_PUMP
     if "暴跌" in regime_label:
