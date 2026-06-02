@@ -895,7 +895,7 @@ def _fmt_price_cornix(p: float) -> str:
     else: return f"{p:.5f}"
 
 def send_cornix(signal: dict) -> bool:
-    """发送 Cornix 标准格式信号"""
+    """Cornix 标准信号 — 策略自适应TP/SL/杠杆/追踪"""
     channel = TELEGRAM.get("cornix_channel", "")
     if not channel:
         return False
@@ -905,62 +905,80 @@ def send_cornix(signal: dict) -> bool:
     stop = signal.get("stop_loss", 0)
     target = signal.get("target", 0)
     pattern = signal.get("pattern", "")
-
-    # 杠杆分级
     score = signal.get("score", 60)
+    is_eth = "ETH" in pair
+
+    # ─── 策略参数表 ───
     if "剥头皮" in pattern or "scalp" in pattern.lower():
         lev = 30 if score >= 75 else (25 if score >= 60 else 20)
-    elif score >= 85: lev = 25
-    elif score >= 75: lev = 20
-    elif score >= 65: lev = 15
-    else: lev = 10
-    lev = min(lev, signal.get("leverage", 25))
-
-    fmt = _fmt_price_cornix
-    entry_min = entry * 0.997
-    entry_max = entry * 1.003
-    risk = abs(entry - stop)
-    sig_type = "Breakout" if "突破" in pattern else "Regular"
-
-    if signal["direction"] == "long":
-        tp1 = entry + risk * 0.5; tp2 = entry + risk * 1.0; tp3 = entry + risk * 1.5
+        tp1_pct = 0.45 if is_eth else 0.40
+        sl_pct = 0.25 if is_eth else 0.20
+        tp_count = 1
+        trail_type = "Breakeven"
+    elif "震荡" in pattern or "range" in pattern.lower():
+        lev = 20 if is_eth else 25
+        tp1_pct = 0.50 if is_eth else 0.40
+        sl_pct = 0.35 if is_eth else 0.30
+        tp_count = 2
+        trail_type = "Breakeven"
+    elif "趋势" in pattern or "trend" in pattern.lower():
+        lev = 20 if score >= 75 else 15
+        tp1_pct = 0.65 if is_eth else 0.55
+        sl_pct = 0.45 if is_eth else 0.35
+        tp_count = 1
+        trail_type = "Percent Below Highest"
+    elif "突破" in pattern or "breakout" in pattern.lower():
+        lev = 20
+        tp1_pct = 0.60 if is_eth else 0.50
+        sl_pct = 0.40 if is_eth else 0.30
+        tp_count = 1
+        trail_type = "Percent Below Highest"
     else:
-        tp1 = entry - risk * 0.5; tp2 = entry - risk * 1.0; tp3 = entry - risk * 1.5
+        lev = 25; tp1_pct = 0.45; sl_pct = 0.25; tp_count = 1; trail_type = "Breakeven"
 
-    lines = [
-        f"{pair}",
-        "",
-        f"Exchanges: OKX Futures",
-        f"Signal Type: {sig_type} ({direction})",
-        f"Leverage: Isolated ({lev}X)",
-        "",
-        "Entry Zone:",
-        f"{fmt(entry_min)} - {fmt(entry_max)}",
-        "",
-        "Take-Profit Targets:",
-        f"1) {fmt(tp1)}",
-        f"2) {fmt(tp2)}",
-        f"3) {fmt(tp3)}",
-        "",
-        "Stop Targets:",
-        f"1) {fmt(stop)}",
-        "",
-        "Trailing Configuration:",
-        "Stop: Breakeven - Trigger: Target (1)",
-    ]
-    msg = chr(10).join(lines)
+    lev = min(lev, signal.get("leverage", 25))
+    fmt = _fmt_price_cornix
+
+    # Entry zone: ±0.08%
+    ep = entry * 0.0008
+    entry_min = entry - ep
+    entry_max = entry + ep
+
+    # TP计算
+    if signal["direction"] == "long":
+        tp1 = entry + entry * tp1_pct / 100
+        tp2 = entry + entry * tp1_pct * 2 / 100 if tp_count >= 2 else 0
+    else:
+        tp1 = entry - entry * tp1_pct / 100
+        tp2 = entry - entry * tp1_pct * 2 / 100 if tp_count >= 2 else 0
+
+    # SL
+    if signal["direction"] == "long":
+        sl_price = min(stop, entry - entry * sl_pct / 100)
+    else:
+        sl_price = max(stop, entry + entry * sl_pct / 100)
+
+    sig_type = "Breakout" if "突破" in pattern else "Regular"
+    trail_dist = "0.35" if is_eth else "0.30"
+
+    # 构建消息
+    lines = [f"{pair}", "", f"Exchanges: OKX Futures", f"Signal Type: {sig_type} ({direction})", f"Leverage: Isolated ({lev}X)", "", "Entry Zone:", f"{fmt(entry_min)} - {fmt(entry_max)}", "", "Take-Profit Targets:", f"1) {fmt(tp1)}"]
+    if tp_count >= 2:
+        lines.append(f"2) {fmt(tp2)}")
+    lines += ["", "Stop Targets:", f"1) {fmt(sl_price)}", "", "Trailing Configuration:", f"Stop: {trail_type}", f"Trigger: Target (1)"]
+    if trail_type == "Percent Below Highest":
+        lines.append(f"Trailing Distance: {trail_dist}%")
+    else:
+        lines.append("")
+    msg = chr(10).join(lines).strip()
+
     token = TELEGRAM["bot_token"]
-    result = api_post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        {"chat_id": channel, "text": msg}
-    )
+    result = api_post(f"https://api.telegram.org/bot{token}/sendMessage", {"chat_id": channel, "text": msg})
     if result:
         logger.info(f"✅ Cornix: {direction} {pair} @ {fmt(entry)} ({lev}X)")
         return True
     logger.warning("Cornix发送失败")
     return False
-
-
 def send_telegram(message: str) -> bool:
     token = TELEGRAM["bot_token"]
     chat_id = TELEGRAM.get("chat_id") or get_chat_id()
