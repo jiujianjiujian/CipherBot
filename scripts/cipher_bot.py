@@ -43,6 +43,7 @@ from strategies import route_strategy, breakout_retest_strategy, fakeout_reversa
 from strategy_router import StrategyRouter
 from safety import generate_signal_id, is_signal_executed, mark_signal_executed
 from safety import check_event_blackout, check_health, generate_daily_report
+from binance_reconciler import reconcile, load_local_positions
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -993,8 +994,16 @@ def run_scan():
     health = check_health()
     if not health.get("binance_api"):
         logger.error("❌ Binance API 异常，暂停交易")
-        send_telegram("⚠️ *Binance API 异常*\n暂停交易，等待恢复")
+        send_telegram("⚠️ *Binance API 异常*\n暂停交易，等待恢复", TELEGRAM)
         return
+
+    # v5: Binance真实仓位对账
+    all_ok, reconcile_issues = reconcile()
+    if not all_ok:
+        for issue in reconcile_issues[:3]:
+            logger.warning(f"  对账: {issue}")
+        if any("孤儿" in i or "危险" in i for i in reconcile_issues):
+            send_telegram(f"⚠️ *仓位对账异常*\n" + "\n".join(reconcile_issues[:3]), TELEGRAM)
 
     # v5: 动态冷却 — 趋势强+OFI确认时10分钟，否则30分钟
     ofi_val = btc_ofi.get("ofi", 0)

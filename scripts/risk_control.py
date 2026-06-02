@@ -35,7 +35,9 @@ DEFAULT_RISK_CONFIG = {
     "leverage_cap_normal": 15,        # 普通信号 ≤ 15x
     "leverage_cap_strong": 25,        # 强信号(A+级) ≤ 25x
     "min_strong_score": 80,           # 25x 需要的最低评分
-    "max_spread_pct": 0.05,           # 最大价差 0.05%
+    "max_spread_scalp_pct": 0.02,     # 剥头皮最大价差 0.02%
+    "max_spread_range_pct": 0.03,     # 震荡最大价差 0.03%
+    "max_spread_trend_pct": 0.05,     # 趋势最大价差 0.05%
     "min_depth_ratio": 5.0,           # 最小深度比
     "max_slippage_pct": 0.15,         # 最大预估滑点
     "order_timeout_seconds": 300,     # 订单超时 5 分钟
@@ -156,8 +158,8 @@ class RiskEngine:
         return True
 
     # ─── 6. 价差/深度检查（使用order_flow数据）───
-    def check_spread_and_depth(self, order_book: dict) -> bool:
-        """检查买一卖一价差和订单簿深度"""
+    def check_spread_and_depth(self, order_book: dict, pattern: str = "") -> bool:
+        """检查买一卖一价差和订单簿深度（按策略分级）"""
         if not order_book:
             return True
         bids = order_book.get("bids", [])
@@ -168,8 +170,17 @@ class RiskEngine:
         best_ask = float(asks[0][0])
         mid = (best_bid + best_ask) / 2
         spread_pct = (best_ask - best_bid) / mid * 100 if mid > 0 else 0
-        if spread_pct > self.config["max_spread_pct"]:
-            self.violations.append(f"价差 {spread_pct:.3f}% > {self.config['max_spread_pct']}%，拒单")
+
+        # 按策略分级
+        if "剥头皮" in pattern or "scalp" in pattern.lower():
+            max_s = self.config["max_spread_scalp_pct"]
+        elif "震荡" in pattern or "range" in pattern.lower():
+            max_s = self.config["max_spread_range_pct"]
+        else:
+            max_s = self.config["max_spread_trend_pct"]
+
+        if spread_pct > max_s:
+            self.violations.append(f"价差{spread_pct:.3f}%>{max_s}%({pattern})，拒单")
             return False
         return True
 
@@ -317,7 +328,7 @@ class RiskEngine:
             net_ok, net_val = self.check_net_profit(price, stop, target, direction, lev, pat)
             if not net_ok:
                 passed = False
-            if order_book and not self.check_spread_and_depth(order_book):
+            if order_book and not self.check_spread_and_depth(order_book, signal.get("pattern", "")):
                 passed = False
 
             # 自动降级乘数
