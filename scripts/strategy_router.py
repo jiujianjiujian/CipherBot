@@ -20,6 +20,9 @@ class MarketMode(Enum):
     TREND_UP = "上升趋势"
     TREND_DOWN = "下降趋势"
     SLOW_BEAR = "阴跌行情"
+    SLOW_BULL = "慢涨行情"
+    FAST_PUMP = "暴涨行情"
+    FAST_DUMP = "暴跌行情"
     RANGE = "区间震荡"
     BREAKOUT = "突破"
     FAKEOUT = "假突破"
@@ -36,9 +39,21 @@ MODE_STRATEGY_MAP = {
         "primary": ["trend_short", "breakout_retest_short"],
         "disabled": ["range_long", "vwap_reversion_long"],
     },
+    MarketMode.SLOW_BULL: {
+        "primary": ["slow_bull_long", "trend_long"],
+        "disabled": ["range_short", "scalp_ofi_short"],
+    },
     MarketMode.SLOW_BEAR: {
         "primary": ["trend_short", "slow_bear_short"],
         "disabled": ["range_long", "vwap_reversion_long", "scalp_ofi_long"],
+    },
+    MarketMode.FAST_PUMP: {
+        "primary": ["fakeout_reversal_short", "breakout_retest_long"],
+        "disabled": ["trend_long", "range_long", "scalp_ofi_long"],
+    },
+    MarketMode.FAST_DUMP: {
+        "primary": ["fakeout_reversal_long", "breakout_retest_short"],
+        "disabled": ["trend_short", "range_short", "scalp_ofi_short"],
     },
     MarketMode.RANGE: {
         "primary": ["range", "vwap_reversion"],
@@ -232,6 +247,12 @@ def detect_market_mode(regime_label: str, rsi_1h: float,
     bb_bw = bb.get("bandwidth", 100) if bb else 100
     ofi_val = abs(ofi.get("ofi", 0)) if ofi else 0
 
+    if "暴涨" in regime_label:
+        return MarketMode.FAST_PUMP
+    if "暴跌" in regime_label:
+        return MarketMode.FAST_DUMP
+    if "慢涨" in regime_label:
+        return MarketMode.SLOW_BULL
     if "阴跌" in regime_label:
         return MarketMode.SLOW_BEAR
     if "下降" in regime_label:

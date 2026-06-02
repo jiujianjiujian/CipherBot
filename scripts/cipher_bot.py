@@ -919,7 +919,7 @@ def run_scan():
     # v5: OI/资金费率分析
     btc_contract = get_contract_data("BTCUSDT")
     market_ctx = evaluate_market_context(btc_k1h, btc_k4h, oi_data=btc_contract)
-    regime = classify_regime(btc_k4h)
+    regime = classify_regime(btc_k4h, btc_k1h)
     regime_label = get_regime_params(regime).get("label", "?")
     status_icon = "!!" if market_ctx.derisk else "OK"
     # OI信息

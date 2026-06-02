@@ -16,7 +16,10 @@ from typing import Dict, List, Optional, Tuple
 class Regime(Enum):
     TRENDING_BULL = "trending_bull"
     TRENDING_BEAR = "trending_bear"
-    SLOW_BEAR = "slow_bear"     # 阴跌: 反弹弱+逐级破位
+    SLOW_BEAR = "slow_bear"
+    SLOW_BULL = "slow_bull"
+    FAST_PUMP = "fast_pump"
+    FAST_DUMP = "fast_dump"
     RANGING = "ranging"
     VOLATILE = "volatile"
     UNKNOWN = "unknown"
@@ -24,6 +27,12 @@ class Regime(Enum):
 
 # 各行情模式下的策略参数
 REGIME_PARAMS: Dict[Regime, dict] = {
+    Regime.SLOW_BULL: {
+        "label": "🐢 慢涨行情",
+        "size_multiplier": 1.1, "min_rr": 2.0, "max_stop_pct": 0.50,
+        "prefer_long": True, "score_bonus_long": 5, "score_penalty_short": 10,
+        "trailing_pct": 0.35, "max_leverage": 22,
+    },
     Regime.SLOW_BEAR: {
         "label": "🐌 阴跌行情",
         "size_multiplier": 1.0,
@@ -62,11 +71,21 @@ REGIME_PARAMS: Dict[Regime, dict] = {
         "score_bonus_long": 0,
         "score_penalty_short": 0,
     },
+    Regime.FAST_PUMP: {
+        "label": "🚀 暴涨行情",
+        "size_multiplier": 0.6, "min_rr": 3.0, "max_stop_pct": 0.60,
+        "prefer_long": True, "score_bonus_long": 3, "score_penalty_short": 10,
+        "trailing_pct": 0.40, "max_leverage": 18,
+    },
+    Regime.FAST_DUMP: {
+        "label": "💥 暴跌行情",
+        "size_multiplier": 0.6, "min_rr": 3.0, "max_stop_pct": 0.60,
+        "prefer_long": False, "score_bonus_short": 3, "score_penalty_long": 10,
+        "trailing_pct": 0.45, "max_leverage": 18,
+    },
     Regime.VOLATILE: {
         "label": "🌊 高波动",
-        "size_multiplier": 0.5,        # 减半仓
-        "min_rr": 3.0,                 # 极高盈亏比要求
-        "max_stop_pct": 1.5,           # 放宽止损（避免被波动扫掉）
+        "size_multiplier": 0.5, "min_rr": 3.0, "max_stop_pct": 1.5,
         "prefer_long": None,
         "score_bonus_long": 0,
         "score_penalty_short": 0,
@@ -86,7 +105,7 @@ REGIME_PARAMS: Dict[Regime, dict] = {
 from indicators import calc_ema, calc_atr
 
 
-def classify_regime(klines_4h: Optional[List[dict]]) -> Regime:
+def classify_regime(klines_4h: Optional[List[dict]], klines_15m: Optional[List[dict]] = None) -> Regime:
     """
     分类当前市场行情模式
 
@@ -102,9 +121,23 @@ def classify_regime(klines_4h: Optional[List[dict]]) -> Regime:
     ema20 = calc_ema(closes, min(20, len(closes)))
     ema50 = calc_ema(closes, min(50, len(closes)))
 
+    # ─── Step 0: 暴涨暴跌检测（用15m数据）───
+    if klines_15m and len(klines_15m) >= 20:
+        c15 = [k["close"] for k in klines_15m]
+        v15 = [k["volume"] for k in klines_15m]
+        recent_candles = klines_15m[-3:]
+        avg_vol = sum(v15) / len(v15)
+        for k in recent_candles:
+            body = abs(k["close"] - k["open"])
+            range_pct = body / k["open"] * 100
+            vol_ratio = k["volume"] / avg_vol if avg_vol > 0 else 1
+            if range_pct > 2.0 and vol_ratio > 2.5:
+                if k["close"] > k["open"]:  # 大阳线+放量
+                    return Regime.FAST_PUMP
+                else:  # 大阴线+放量
+                    return Regime.FAST_DUMP
+
     # 波动率 —— ATR%
-    atr_val = calc_atr(klines_4h, 14)
-    atr_pct = atr_val / price * 100 if price > 0 else 0
 
     # 均值ATR (近20根)
     if len(klines_4h) >= 30:
@@ -129,8 +162,13 @@ def classify_regime(klines_4h: Optional[List[dict]]) -> Regime:
             return Regime.SLOW_BEAR
         return Regime.TRENDING_BEAR
 
-    # ─── Step 3: 趋势判断 ───
+    # ─── Step 3: 慢涨识别（SLOW_BULL）───
     if ema20 > ema50 * 1.005 and price > ema20:
+        # 检查是否为慢涨（低波动+持续在EMA20上）
+        closes_slice = closes[-6:] if len(closes) >= 6 else closes
+        consecutive_above_ema20 = sum(1 for c in closes_slice if c > ema20)
+        if consecutive_above_ema20 >= 5 and atr_pct < 1.2:
+            return Regime.SLOW_BULL
         return Regime.TRENDING_BULL
 
     # ─── Step 4: 其余情况 → 震荡 ───
