@@ -29,6 +29,8 @@ class MarketContext:
         self.oi_info = {}              # v5: OI/资金费率分析
         self.quality_score = 5.5       # v5: 行情评分 0-10
         self.liquidity_score = 100     # v5: 流动性评分 0-100，低=<30
+        self.dump_exhaustion_score = 0 # v5: 暴跌衰竭反弹评分
+        self.bounce_detected = False   # v5: 是否检测到低位反弹
 
     def __repr__(self):
         return (f"MarketContext(derisk={self.derisk}, factor={self.derisk_factor:.2f}, "
@@ -189,6 +191,37 @@ def evaluate_market_context(klines_1h: Optional[List[dict]],
     elif oi_sig == "no_chase": score -= 0.5
 
     ctx.quality_score = round(max(1, min(10, score)), 1)
+
+    # ─── 8. 暴跌衰竭反弹检测（空头陷阱识别）───
+    if klines_1h and len(klines_1h) >= 10:
+        _closes = [k["close"] for k in klines_1h[-10:]]
+        _lows = [k["low"] for k in klines_1h[-10:]]
+        _highs = [k["high"] for k in klines_1h[-10:]]
+        _vols = [k["volume"] for k in klines_1h[-10:]]
+        _price = _closes[-1]
+
+        # 从低点反弹
+        _lowest = min(_lows)
+        _rebound = (_price - _lowest) / _lowest * 100 if _lowest > 0 else 0
+
+        # 长下影检测
+        _last = klines_1h[-1]
+        _body = abs(_last["close"] - _last["open"])
+        _lower_wick = min(_last["close"], _last["open"]) - _last["low"]
+        _wick_ratio = _lower_wick / _body if _body > 0 else 0
+
+        # OFI转正检测（从ofi_info）
+        _ofi_now = ctx.oi_info.get("ofi_prev", 0) or 0
+
+        _score = 0
+        if _rebound >= 1.2: _score += 20
+        if _wick_ratio >= 0.45: _score += 15
+        if _rebound >= 2.0: _score += 10
+        if _closes[-1] > _closes[-2] and _closes[-2] > _closes[-3]: _score += 10
+        if _vols[-1] > sum(_vols[:-1]) / max(len(_vols)-1, 1) * 1.5: _score += 10
+
+        ctx.dump_exhaustion_score = _score
+        ctx.bounce_detected = _rebound >= 1.2
 
     return ctx
 

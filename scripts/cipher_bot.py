@@ -814,8 +814,18 @@ def find_trading_signal(price: float, ticker_24h: dict,
         s["fvg_info"] = {"in_fvg": False}
         candidates.append(s)
 
-    # v5: 方向过滤 — 下降趋势不做多，上升趋势不做空
-    if regime_params.get("prefer_long") is False:
+    # v5: 方向过滤 — 识别暴跌衰竭反弹时放宽做多限制
+    _bounce_override = False
+    try:
+        if market_context and market_context.bounce_detected and market_context.dump_exhaustion_score >= 60:
+            if regime_params.get("prefer_long") is False:
+                _bounce_override = True
+                logger.info(f"  暴跌衰竭反弹(评分{market_context.dump_exhaustion_score})，允许小仓反手多")
+    except: pass
+
+    if _bounce_override:
+        pass  # 衰竭反弹时不过滤方向，让风控/voter判断
+    elif regime_params.get("prefer_long") is False:
         candidates = [c for c in candidates if c["direction"] != "long"]
     elif regime_params.get("prefer_long") is True:
         candidates = [c for c in candidates if c["direction"] != "short"]
