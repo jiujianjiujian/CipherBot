@@ -193,35 +193,56 @@ def evaluate_market_context(klines_1h: Optional[List[dict]],
     ctx.quality_score = round(max(1, min(10, score)), 1)
 
     # ─── 8. 暴跌衰竭反弹检测（空头陷阱识别）───
-    if klines_1h and len(klines_1h) >= 10:
-        _closes = [k["close"] for k in klines_1h[-10:]]
-        _lows = [k["low"] for k in klines_1h[-10:]]
-        _highs = [k["high"] for k in klines_1h[-10:]]
-        _vols = [k["volume"] for k in klines_1h[-10:]]
-        _price = _closes[-1]
-
-        # 从低点反弹
-        _lowest = min(_lows)
+    if klines_1h and len(klines_1h) >= 15 and len(klines_4h) >= 20:
+        _c15 = [k["close"] for k in klines_1h[-15:]]
+        _l15 = [k["low"] for k in klines_1h[-15:]]
+        _v15 = [k["volume"] for k in klines_1h[-15:]]
+        _price = _c15[-1]
+        _lowest = min(_l15)
         _rebound = (_price - _lowest) / _lowest * 100 if _lowest > 0 else 0
 
-        # 长下影检测
         _last = klines_1h[-1]
         _body = abs(_last["close"] - _last["open"])
         _lower_wick = min(_last["close"], _last["open"]) - _last["low"]
-        _wick_ratio = _lower_wick / _body if _body > 0 else 0
+        _wick = _lower_wick / _body if _body > 0 else 0
 
-        # OFI转正检测（从ofi_info）
-        _ofi_now = ctx.oi_info.get("ofi_prev", 0) or 0
+        # 计算VWAP、EMA20用于站回检测
+        _c4h = [k["close"] for k in klines_4h]
+        _vwap = calc_vwap(klines_1h) if 'calc_vwap' in dir() else 0
+        _ema20 = calc_ema(_c15, 20) if len(_c15) >= 20 else (_c15[-1] if _c15 else 0)
+        _c4h_ema20 = calc_ema(_c4h, min(20, len(_c4h))) if len(_c4h) >= 5 else 0
+        _val = _c4h_ema20 * 0.98  # 近似VAL
 
         _score = 0
+        # K线反弹信号
         if _rebound >= 1.2: _score += 20
-        if _wick_ratio >= 0.45: _score += 15
         if _rebound >= 2.0: _score += 10
-        if _closes[-1] > _closes[-2] and _closes[-2] > _closes[-3]: _score += 10
-        if _vols[-1] > sum(_vols[:-1]) / max(len(_vols)-1, 1) * 1.5: _score += 10
+        if _wick >= 0.45: _score += 15
+        if _v15[-1] > sum(_v15[:-1]) / max(len(_v15)-1, 1) * 1.8: _score += 15
+        if _c15[-1] > _c15[-2] > _c15[-3]: _score += 10
+        # 订单流确认（需ofi_info有数据）
+        if ctx.oi_info: _score += 15  # 标记：OFI/CVD信息可用
+        # 站回关键位
+        if _price > _vwap and _vwap > 0: _score += 10
+        if _price > _ema20 and _ema20 > 0: _score += 10
+        if _price > _val and _val > 0: _score += 10
 
-        ctx.dump_exhaustion_score = _score
+        ctx.dump_exhaustion_score = min(100, _score)
         ctx.bounce_detected = _rebound >= 1.2
+
+        # 暴涨衰竭评分（镜像逻辑）
+        _highs = [k["high"] for k in klines_1h[-10:]]
+        _highest = max(_highs)
+        _pullback = (_highest - _price) / _highest * 100 if _highest > 0 else 0
+        _upper_wick = max(_last["close"], _last["open"]) - _last["high"]
+        _uw_ratio = abs(_upper_wick) / _body if _body > 0 else 0
+
+        _ps = 0
+        if _pullback >= 1.2: _ps += 20
+        if _pullback >= 2.0: _ps += 10
+        if _uw_ratio >= 0.45: _ps += 15
+        if _v15[-1] > sum(_v15[:-1]) / max(len(_v15)-1, 1) * 1.8: _ps += 15
+        ctx.pump_exhaustion_score = min(100, _ps)
 
     return ctx
 

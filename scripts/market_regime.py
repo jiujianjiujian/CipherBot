@@ -120,13 +120,12 @@ REGIME_PARAMS: Dict[Regime, dict] = {
     Regime.VOLATILE: {
         "label": "🌊 高波动",
         "size_multiplier": 0.7, "min_rr": 2.5, "max_stop_pct": 1.2,
-        "prefer_long": None,
-        "score_bonus_long": 0,
-        "score_penalty_short": 0,
+        "prefer_long": None, "allow_add_position": False,
+        "score_bonus_long": 0, "score_penalty_short": 0,
     },
     Regime.UNKNOWN: {
         "label": "❓ 未知",
-        "size_multiplier": 0.5,
+        "size_multiplier": 0.0,  # 不明模式不交易
         "min_rr": 2.0,
         "max_stop_pct": 1.0,
         "prefer_long": None,

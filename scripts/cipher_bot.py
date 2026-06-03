@@ -814,20 +814,33 @@ def find_trading_signal(price: float, ticker_24h: dict,
         s["fvg_info"] = {"in_fvg": False}
         candidates.append(s)
 
-    # v5: 方向过滤 — 识别暴跌衰竭反弹时放宽做多限制
-    _bounce_override = False
-    try:
-        if market_context and market_context.bounce_detected and market_context.dump_exhaustion_score >= 60:
-            if regime_params.get("prefer_long") is False:
-                _bounce_override = True
-                logger.info(f"  暴跌衰竭反弹(评分{market_context.dump_exhaustion_score})，允许小仓反手多")
-    except: pass
+    # v5: 方向过滤 — 暴跌衰竭反弹三档判断（if/elif防重叠）
+    # 核心规则: 方向过滤可以临时放宽, 风控绝不放宽
+    _ex = market_context.dump_exhaustion_score if market_context else 0
+    _bn = market_context.bounce_detected if market_context else False
+    _allow_long = False
+    _reverse_lock = False
+    _short_action = "NORMAL"
 
-    if _bounce_override:
-        pass  # 衰竭反弹时不过滤方向，让风控/voter判断
-    elif regime_params.get("prefer_long") is False:
-        candidates = [c for c in candidates if c["direction"] != "long"]
-    elif regime_params.get("prefer_long") is True:
+    if _bn and _ex >= 80:
+        _allow_long = True
+        _reverse_lock = True
+        _short_action = "REDUCE"
+        logger.info(f"  ✅ FAST_DUMP_EXHAUSTION确认(评分{_ex}) 允许小仓反杀多候选 杠杆上限20x 加仓禁止 风控不放宽")
+    elif _bn and _ex >= 70:
+        _allow_long = True
+        _reverse_lock = True
+        _short_action = "REDUCE"
+        logger.info(f"  ⚠️ 方向过滤临时放宽 原因:暴跌衰竭反弹候选 评分{_ex} 允许多头候选进入pipeline 风控不放宽")
+    elif _bn and _ex >= 60:
+        _reverse_lock = True
+        _short_action = "REDUCE"
+        logger.info(f"  ⏸️ 低位反弹(评分{_ex}) 禁止追空 空单减仓优先")
+    else:
+        if regime_params.get("prefer_long") is False:
+            candidates = [c for c in candidates if c["direction"] != "long"]
+        elif regime_params.get("prefer_long") is True:
+            candidates = [c for c in candidates if c["direction"] != "short"]
         candidates = [c for c in candidates if c["direction"] != "short"]
 
     if candidates:

@@ -31,10 +31,11 @@ DEFAULT_RISK_CONFIG = {
     "consecutive_cooldown_hours": 4,  # 连亏后停机 4 小时
     "max_positions_same_dir": 1,      # 同方向最多 1 单
     "max_total_risk_pct": 2.0,        # 总风险敞口 ≤ 2%
-    "min_liquidation_distance_pct": 15.0,  # 强平距离 ≥ 15%
-    "leverage_cap_normal": 20,        # 普通信号 ≤ 15x
-    "leverage_cap_strong": 30,        # 强信号(A+级) ≤ 25x
-    "min_strong_score": 80,           # 25x 需要的最低评分
+    "min_liquidation_distance_pct": 1.0,   # 强平距离绝对下限1.0%（动态=SL×3）
+    "min_liquidation_sl_multiplier": 3.0,  # 强平距离 ≥ SL距离 × 3
+    "leverage_cap_normal": 20,        # A级≤20x        # 普通信号 ≤ 15x
+    "leverage_cap_strong": 30,        # S级≥85分→30x        # 强信号(A+级) ≤ 25x
+    "min_strong_score": 85,            # 30x门槛提升到85分           # 25x 需要的最低评分
     "max_spread_scalp_pct": 0.02,     # 剥头皮最大价差 0.02%
     "max_spread_range_pct": 0.03,     # 震荡最大价差 0.03%
     "max_spread_trend_pct": 0.05,     # 趋势最大价差 0.05%
@@ -45,7 +46,8 @@ DEFAULT_RISK_CONFIG = {
     "daily_profit_lock_pct": 8.0,     # 单日盈利达8%锁仓停机
     "daily_peak_drawdown_pct": 2.0,   # 日内盈利回撤>2%停机
     "use_capital_pct": 0.35,          # 每笔使用本金比例25%
-    "min_net_profit_usdt": 50,        # 单笔最低净利润20U
+    "min_net_profit_usdt": 50,        # 趋势/阶梯单最低净利润
+    "min_net_profit_scale_pct": 2.0,   # 震荡/反杀按权益2%动态
     "capital_base": 1000,             # 本金基数
     "max_position_time_minutes": 120, # 最大持仓时间
     "fee_pct": 0.05,                  # 手续费率%
@@ -144,16 +146,20 @@ class RiskEngine:
         return True, lev
 
     # ─── 5. 强平距离检查（需传入强平价）───
-    def check_liquidation_distance(self, price: float, liq_price: float, direction: str) -> bool:
+    def check_liquidation_distance(self, price: float, stop: float, liq_price: float, direction: str) -> bool:
+        """强平距离: ≥SL×3, 绝对≥1.0%"""
         if liq_price <= 0:
-            return True  # 无强平数据时放行
+            return True
+        sl_dist = abs(price - stop) / price * 100 if stop > 0 else 0
         if direction == "long":
             dist = (price - liq_price) / price * 100
         else:
             dist = (liq_price - price) / price * 100
-        min_dist = self.config["min_liquidation_distance_pct"]
+        min_dyn = sl_dist * self.config["min_liquidation_sl_multiplier"]
+        min_abs = self.config["min_liquidation_distance_pct"]
+        min_dist = max(min_dyn, min_abs)
         if dist < min_dist:
-            self.violations.append(f"强平距离 {dist:.1f}% < {min_dist}%，拒单")
+            self.violations.append(f"强平距离{dist:.1f}%<{'SL'+str(round(sl_dist,2))+'×3' if sl_dist>0 else '1.0%'}={min_dist:.1f}%，拒单")
             return False
         return True
 
@@ -325,7 +331,7 @@ class RiskEngine:
             target = signal.get("target", 0)
             direction = signal.get("direction", "long")
 
-            if not self.check_liquidation_distance(price, liq_price, direction):
+            if not self.check_liquidation_distance(price, signal.get("stop_loss", 0), liq_price, direction):
                 passed = False
             if not self.check_real_rr(price, stop, target, direction):
                 passed = False
