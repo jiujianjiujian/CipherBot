@@ -17,7 +17,8 @@ class Regime(Enum):
     TRENDING_BULL = "trending_bull"
     TRENDING_BEAR = "trending_bear"
     SLOW_BEAR = "slow_bear"
-    BEAR_CASCADE = "bear_cascade"  # 阶梯下跌
+    BEAR_CASCADE = "bear_cascade"
+    BULL_CASCADE = "bull_cascade"  # 阶梯下跌
     SLOW_BULL = "slow_bull"
     FAST_PUMP = "fast_pump"
     FAST_DUMP = "fast_dump"
@@ -47,6 +48,12 @@ REGIME_PARAMS: Dict[Regime, dict] = {
         "size_multiplier": 1.2, "min_rr": 2.5, "max_stop_pct": 0.60,
         "prefer_long": False, "score_bonus_short": 10, "score_penalty_long": 15,
         "trailing_pct": 0.40, "max_leverage": 22,
+    },
+    Regime.BULL_CASCADE: {
+        "label": "🔥 阶梯上涨",
+        "size_multiplier": 1.2, "min_rr": 2.0, "max_stop_pct": 0.60,
+        "prefer_long": True, "score_bonus_long": 10, "score_penalty_short": 15,
+        "trailing_pct": 0.35, "max_leverage": 22,
     },
     Regime.TRENDING_BULL: {
         "label": "📈 上升趋势",
@@ -161,8 +168,13 @@ def classify_regime(klines_4h: Optional[List[dict]], klines_15m: Optional[List[d
     else:
         avg_atr_pct = atr_pct
 
+    # ─── Step 0.5: 阶梯上涨检测（BULL_CASCADE）───
+    # 特征: EMA20>EMA50 + 价格>EMA20 + ATR适中 + 连续上涨
+    if ema20 > ema50 * 1.005 and price > ema20 and atr_pct >= 0.8 and atr_pct < 2.5:
+        if len(closes) >= 4 and closes[-1] > closes[-2] >= closes[-3]:
+            return Regime.BULL_CASCADE
+
     # ─── Step 1: 波动率过滤 ───
-    # 如果当前ATR比均值高50%以上 → 高波动
     if atr_pct > 2.0 or (avg_atr_pct > 0 and atr_pct > avg_atr_pct * 1.5):
         return Regime.VOLATILE
 
