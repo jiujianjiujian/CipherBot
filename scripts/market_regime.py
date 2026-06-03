@@ -20,8 +20,10 @@ class Regime(Enum):
     BEAR_CASCADE = "bear_cascade"
     BULL_CASCADE = "bull_cascade"  # 阶梯下跌
     SLOW_BULL = "slow_bull"
-    FAST_PUMP = "fast_pump"
-    FAST_DUMP = "fast_dump"
+    FAST_PUMP_CONTINUATION = "fast_pump_continuation"
+    FAST_PUMP_EXHAUSTION = "fast_pump_exhaustion"
+    FAST_DUMP_CONTINUATION = "fast_dump_continuation"
+    FAST_DUMP_EXHAUSTION = "fast_dump_exhaustion"
     RANGE_WIDE = "range_wide"       # 宽震荡 可交易
     RANGE_NARROW = "range_narrow"   # 窄震荡 少做
     CHOPPY = "choppy"               # 乱震荡 禁止交易
@@ -91,17 +93,29 @@ REGIME_PARAMS: Dict[Regime, dict] = {
         "prefer_long": None,
         "score_bonus_long": 0, "score_penalty_short": 0,
     },
-    Regime.FAST_PUMP: {
-        "label": "🚀 暴涨行情",
-        "size_multiplier": 0.6, "min_rr": 3.0, "max_stop_pct": 0.60,
-        "prefer_long": True, "score_bonus_long": 3, "score_penalty_short": 10,
+    Regime.FAST_PUMP_CONTINUATION: {
+        "label": "🚀 暴涨延续",
+        "size_multiplier": 0.7, "min_rr": 2.5, "max_stop_pct": 0.60,
+        "prefer_long": True, "score_bonus_long": 3, "score_penalty_long": 8,
         "trailing_pct": 0.40, "max_leverage": 18,
     },
-    Regime.FAST_DUMP: {
-        "label": "💥 暴跌行情",
-        "size_multiplier": 0.6, "min_rr": 3.0, "max_stop_pct": 0.60,
-        "prefer_long": False, "score_bonus_short": 3, "score_penalty_long": 10,
+    Regime.FAST_PUMP_EXHAUSTION: {
+        "label": "📉 暴涨衰竭",
+        "size_multiplier": 0.5, "min_rr": 3.0, "max_stop_pct": 0.50,
+        "prefer_long": False, "score_bonus_short": 5, "score_penalty_long": 10,
+        "trailing_pct": 0.35, "max_leverage": 15,
+    },
+    Regime.FAST_DUMP_CONTINUATION: {
+        "label": "💥 暴跌延续",
+        "size_multiplier": 0.7, "min_rr": 2.5, "max_stop_pct": 0.60,
+        "prefer_long": False, "score_bonus_short": 3, "score_penalty_long": 8,
         "trailing_pct": 0.45, "max_leverage": 18,
+    },
+    Regime.FAST_DUMP_EXHAUSTION: {
+        "label": "📈 暴跌衰竭",
+        "size_multiplier": 0.5, "min_rr": 3.0, "max_stop_pct": 0.50,
+        "prefer_long": True, "score_bonus_long": 5, "score_penalty_short": 10,
+        "trailing_pct": 0.40, "max_leverage": 15,
     },
     Regime.VOLATILE: {
         "label": "🌊 高波动",
@@ -152,10 +166,13 @@ def classify_regime(klines_4h: Optional[List[dict]], klines_15m: Optional[List[d
             range_pct = body / k["open"] * 100
             vol_ratio = k["volume"] / avg_vol if avg_vol > 0 else 1
             if range_pct > 2.0 and vol_ratio > 2.5:
-                if k["close"] > k["open"]:  # 大阳线+放量
-                    return Regime.FAST_PUMP
-                else:  # 大阴线+放量
-                    return Regime.FAST_DUMP
+                upper = k["high"] - max(k["close"], k["open"])
+                lower = min(k["close"], k["open"]) - k["low"]
+                has_wick = upper > body * 0.3 or lower > body * 0.3
+                if k["close"] > k["open"]:
+                    return Regime.FAST_PUMP_EXHAUSTION if has_wick else Regime.FAST_PUMP_CONTINUATION
+                else:
+                    return Regime.FAST_DUMP_EXHAUSTION if has_wick else Regime.FAST_DUMP_CONTINUATION
 
     # 波动率 —— ATR%
     atr_val = calc_atr(klines_4h, 14)

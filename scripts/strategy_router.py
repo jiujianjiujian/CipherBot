@@ -22,8 +22,10 @@ class MarketMode(Enum):
     SLOW_BEAR = "阴跌行情"
     BEAR_CASCADE = "阶梯下跌"
     SLOW_BULL = "慢涨行情"
-    FAST_PUMP = "暴涨行情"
-    FAST_DUMP = "暴跌行情"
+    FAST_PUMP_CONTINUATION = "暴涨延续"
+    FAST_PUMP_EXHAUSTION = "暴涨衰竭"
+    FAST_DUMP_CONTINUATION = "暴跌延续"
+    FAST_DUMP_EXHAUSTION = "暴跌衰竭"
     RANGE_WIDE = "宽震荡"
     RANGE_NARROW = "窄震荡"
     CHOPPY = "乱震荡"
@@ -58,13 +60,21 @@ MODE_STRATEGY_MAP = {
         "primary": ["trend_long", "breakout_retest_long"],
         "disabled": ["range_short", "vwap_reversion_short", "scalp_ofi_short", "fakeout_reversal_long"],
     },
-    MarketMode.FAST_PUMP: {
-        "primary": ["fakeout_reversal_short", "breakout_retest_long"],
-        "disabled": ["trend_long", "range_long", "scalp_ofi_long"],
+    MarketMode.FAST_PUMP_CONTINUATION: {
+        "primary": ["breakout_retest_long"],
+        "disabled": ["trend_long", "range_long", "scalp_ofi_long", "fakeout_reversal_short"],
     },
-    MarketMode.FAST_DUMP: {
-        "primary": ["fakeout_reversal_long", "breakout_retest_short"],
-        "disabled": ["trend_short", "range_short", "scalp_ofi_short"],
+    MarketMode.FAST_PUMP_EXHAUSTION: {
+        "primary": ["fakeout_reversal_short"],
+        "disabled": ["trend_long", "range_long", "breakout_retest_long", "scalp_ofi_long"],
+    },
+    MarketMode.FAST_DUMP_CONTINUATION: {
+        "primary": ["breakout_retest_short"],
+        "disabled": ["trend_short", "range_short", "scalp_ofi_short", "fakeout_reversal_long"],
+    },
+    MarketMode.FAST_DUMP_EXHAUSTION: {
+        "primary": ["fakeout_reversal_long"],
+        "disabled": ["trend_short", "range_short", "breakout_retest_short", "scalp_ofi_short"],
     },
     MarketMode.RANGE_WIDE: {
         "primary": ["range", "vwap_reversion", "fakeout_reversal"],
@@ -272,10 +282,14 @@ def detect_market_mode(regime_label: str, rsi_1h: float,
         return MarketMode.RANGE_NARROW
     if "乱震荡" in regime_label:
         return MarketMode.CHOPPY
-    if "暴涨" in regime_label:
-        return MarketMode.FAST_PUMP
-    if "暴跌" in regime_label:
-        return MarketMode.FAST_DUMP
+    if "暴涨延续" in regime_label:
+        return MarketMode.FAST_PUMP_CONTINUATION
+    if "暴涨衰竭" in regime_label:
+        return MarketMode.FAST_PUMP_EXHAUSTION
+    if "暴跌延续" in regime_label:
+        return MarketMode.FAST_DUMP_CONTINUATION
+    if "暴跌衰竭" in regime_label:
+        return MarketMode.FAST_DUMP_EXHAUSTION
     if "慢涨" in regime_label:
         return MarketMode.SLOW_BULL
     if "阴跌" in regime_label:
