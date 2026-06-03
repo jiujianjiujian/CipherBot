@@ -49,13 +49,13 @@ REGIME_PARAMS: Dict[Regime, dict] = {
         "label": "💧 阶梯下跌",
         "size_multiplier": 1.2, "min_rr": 2.5, "max_stop_pct": 0.60,
         "prefer_long": False, "score_bonus_short": 10, "score_penalty_long": 15,
-        "trailing_pct": 0.40, "max_leverage": 22,
+        "trailing_pct": 0.40, "max_leverage": 25,
     },
     Regime.BULL_CASCADE: {
         "label": "🔥 阶梯上涨",
         "size_multiplier": 1.2, "min_rr": 2.0, "max_stop_pct": 0.60,
         "prefer_long": True, "score_bonus_long": 10, "score_penalty_short": 15,
-        "trailing_pct": 0.35, "max_leverage": 22,
+        "trailing_pct": 0.35, "max_leverage": 25,
     },
     Regime.TRENDING_BULL: {
         "label": "📈 上升趋势",
@@ -119,7 +119,7 @@ REGIME_PARAMS: Dict[Regime, dict] = {
     },
     Regime.VOLATILE: {
         "label": "🌊 高波动",
-        "size_multiplier": 0.5, "min_rr": 3.0, "max_stop_pct": 1.5,
+        "size_multiplier": 0.7, "min_rr": 2.5, "max_stop_pct": 1.2,
         "prefer_long": None,
         "score_bonus_long": 0,
         "score_penalty_short": 0,

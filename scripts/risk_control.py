@@ -32,8 +32,8 @@ DEFAULT_RISK_CONFIG = {
     "max_positions_same_dir": 1,      # 同方向最多 1 单
     "max_total_risk_pct": 2.0,        # 总风险敞口 ≤ 2%
     "min_liquidation_distance_pct": 15.0,  # 强平距离 ≥ 15%
-    "leverage_cap_normal": 15,        # 普通信号 ≤ 15x
-    "leverage_cap_strong": 25,        # 强信号(A+级) ≤ 25x
+    "leverage_cap_normal": 20,        # 普通信号 ≤ 15x
+    "leverage_cap_strong": 30,        # 强信号(A+级) ≤ 25x
     "min_strong_score": 80,           # 25x 需要的最低评分
     "max_spread_scalp_pct": 0.02,     # 剥头皮最大价差 0.02%
     "max_spread_range_pct": 0.03,     # 震荡最大价差 0.03%
@@ -44,8 +44,8 @@ DEFAULT_RISK_CONFIG = {
     "capital_base": 10000,            # 本金基数
     "daily_profit_lock_pct": 8.0,     # 单日盈利达8%锁仓停机
     "daily_peak_drawdown_pct": 2.0,   # 日内盈利回撤>2%停机
-    "use_capital_pct": 0.25,          # 每笔使用本金比例25%
-    "min_net_profit_usdt": 20,        # 单笔最低净利润20U
+    "use_capital_pct": 0.35,          # 每笔使用本金比例25%
+    "min_net_profit_usdt": 50,        # 单笔最低净利润20U
     "capital_base": 1000,             # 本金基数
     "max_position_time_minutes": 120, # 最大持仓时间
     "fee_pct": 0.05,                  # 手续费率%
