@@ -54,6 +54,10 @@ MODE_STRATEGY_MAP = {
         "primary": ["trend_short", "slow_bear_short", "breakout_retest_short"],
         "disabled": ["range_long", "vwap_reversion_long", "scalp_ofi_long", "fakeout_reversal_long"],
     },
+    MarketMode.BULL_CASCADE: {
+        "primary": ["trend_long", "breakout_retest_long"],
+        "disabled": ["range_short", "vwap_reversion_short", "scalp_ofi_short", "fakeout_reversal_short"],
+    },
     MarketMode.FAST_PUMP: {
         "primary": ["fakeout_reversal_short", "breakout_retest_long"],
         "disabled": ["trend_long", "range_long", "scalp_ofi_long"],
@@ -278,6 +282,8 @@ def detect_market_mode(regime_label: str, rsi_1h: float,
         return MarketMode.SLOW_BEAR
     if "阶梯下跌" in regime_label:
         return MarketMode.BEAR_CASCADE
+    if "阶梯上涨" in regime_label:
+        return MarketMode.BULL_CASCADE
     if "下降" in regime_label:
         if bb_bw > 30 and ofi_val > 0.5:
             return MarketMode.BREAKOUT
