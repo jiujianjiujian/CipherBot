@@ -951,6 +951,9 @@ def run_scan():
         logger.info(f"  VRVP: POC=${v['poc']} 价值区=${v['va_low']}-${v['va_high']} {describe_vrvp(btc_vrvp).split('|')[-1]}")
 
     # v5: 宏观/消息面数据
+    # v5: 模式切换锁（必须在regime分类前初始化）
+    regime_mgr = RegimeTransitionManager()
+
     macro_ctx = MacroContext().evaluate()
     macro_str = f" | 恐慌{macro_ctx.fear_greed}"
     if macro_ctx.dxy:
@@ -985,7 +988,6 @@ def run_scan():
     # v5: 初始化引擎
     risk_engine = RiskEngine()
     pos_machine = PositionStateMachine()
-    regime_mgr = RegimeTransitionManager()
     risk_passed, risk_violations = risk_engine.check_all({})
     logger.info(f"风控状态: {'✅' if risk_passed else '⚠️'} 日盈亏={risk_engine.state['daily_pnl']:.1f}% | "
                 f"连亏={risk_engine.state['consecutive_losses']} | "
