@@ -17,6 +17,7 @@ class Regime(Enum):
     TRENDING_BULL = "trending_bull"
     TRENDING_BEAR = "trending_bear"
     SLOW_BEAR = "slow_bear"
+    BEAR_CASCADE = "bear_cascade"  # 阶梯下跌
     SLOW_BULL = "slow_bull"
     FAST_PUMP = "fast_pump"
     FAST_DUMP = "fast_dump"
@@ -37,14 +38,15 @@ REGIME_PARAMS: Dict[Regime, dict] = {
     },
     Regime.SLOW_BEAR: {
         "label": "🐌 阴跌行情",
-        "size_multiplier": 1.0,
-        "min_rr": 2.5,
-        "max_stop_pct": 0.55,
-        "prefer_long": False,
-        "score_bonus_short": 8,
-        "score_penalty_long": 12,
-        "trailing_pct": 0.35,
-        "max_leverage": 20,
+        "size_multiplier": 1.0, "min_rr": 2.5, "max_stop_pct": 0.55,
+        "prefer_long": False, "score_bonus_short": 8, "score_penalty_long": 12,
+        "trailing_pct": 0.35, "max_leverage": 20,
+    },
+    Regime.BEAR_CASCADE: {
+        "label": "💧 阶梯下跌",
+        "size_multiplier": 1.2, "min_rr": 2.5, "max_stop_pct": 0.60,
+        "prefer_long": False, "score_bonus_short": 10, "score_penalty_long": 15,
+        "trailing_pct": 0.40, "max_leverage": 22,
     },
     Regime.TRENDING_BULL: {
         "label": "📈 上升趋势",
