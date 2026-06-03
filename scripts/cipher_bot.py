@@ -973,8 +973,6 @@ def run_scan():
         elif v['current_position'] == 'below_va': vrvp_str += "📉"
         logger.info(f"  VRVP: POC=${v['poc']} 价值区=${v['va_low']}-${v['va_high']} {describe_vrvp(btc_vrvp).split('|')[-1]}")
 
-    # v5: 宏观/消息面数据
-    # v5: 模式切换锁（必须在regime分类前初始化）
     regime_mgr = RegimeTransitionManager()
 
     macro_ctx = MacroContext().evaluate()
