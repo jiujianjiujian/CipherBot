@@ -44,6 +44,9 @@ from strategy_router import StrategyRouter
 from safety import generate_signal_id, is_signal_executed, mark_signal_executed
 from safety import check_event_blackout, check_health, generate_daily_report
 from binance_reconciler import reconcile, load_local_positions
+from position_state_machine import PositionStateMachine
+from regime_transition_manager import RegimeTransitionManager
+from safety import log_rejected_signal
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -921,7 +924,10 @@ def run_scan():
     btc_contract = get_contract_data("BTCUSDT")
     market_ctx = evaluate_market_context(btc_k1h, btc_k4h, oi_data=btc_contract)
     regime = classify_regime(btc_k4h, btc_k1h)
+    actual_regime, regime_changed = regime_mgr.update(regime.value)
     regime_label = get_regime_params(regime).get("label", "?")
+    if regime_changed:
+        logger.info(f"  行情模式切换: {regime_mgr.previous} -> {regime.value}")
     status_icon = "!!" if market_ctx.derisk else "OK"
     # OI信息
     oi_sig = market_ctx.oi_info.get("signal", "neutral")
@@ -976,8 +982,10 @@ def run_scan():
         send_telegram(warn, TELEGRAM)
         return
 
-    # v5: 初始化风控引擎
+    # v5: 初始化引擎
     risk_engine = RiskEngine()
+    pos_machine = PositionStateMachine()
+    regime_mgr = RegimeTransitionManager()
     risk_passed, risk_violations = risk_engine.check_all({})
     logger.info(f"风控状态: {'✅' if risk_passed else '⚠️'} 日盈亏={risk_engine.state['daily_pnl']:.1f}% | "
                 f"连亏={risk_engine.state['consecutive_losses']} | "
@@ -1066,6 +1074,7 @@ def run_scan():
                 min_score = pconf.get("min_score", MIN_SCORE_GOOD)
                 if score < min_score:
                     logger.info(f"  ⏸️ 信号评分{score}<{min_score}({pair_name}最低要求)，跳过")
+                    log_rejected_signal(signal, f"评分不足{score}<{min_score}", pair_name)
                     continue
 
                 # 信号去重：同币种同方向30分钟内不重复发
@@ -1128,6 +1137,7 @@ def run_scan():
                                              {"price_actual": price, "closes_15m": [k["close"] for k in k15]})
                 if not vresult["passed"]:
                     logger.error(f"  ❌ 验证器拦截: {vresult['summary']}")
+                    log_rejected_signal(signal, f"验证器拦截:{vresult['summary']}", pair_name)
                     send_telegram(f"⚠️ {pair_name} *验证器拦截信号*\n{vresult['summary']}\n\n信号未发送")
                     continue
 
@@ -1146,6 +1156,7 @@ def run_scan():
                 if not risk_passed:
                     reason = "; ".join(risk_violations[:3])
                     logger.error(f"  ❌ 风控拦截: {reason}")
+                    log_rejected_signal(signal, f"风控拦截:{reason}", pair_name)
                     send_telegram(f"⚠️ {pair_name} *风控拦截*\n{reason}")
                     continue
 

@@ -22,6 +22,7 @@ class MarketMode(Enum):
     SLOW_BEAR = "阴跌行情"
     BEAR_CASCADE = "阶梯下跌"
     SLOW_BULL = "慢涨行情"
+    BULL_CASCADE = "阶梯上涨"
     FAST_PUMP_CONTINUATION = "暴涨延续"
     FAST_PUMP_EXHAUSTION = "暴涨衰竭"
     FAST_DUMP_CONTINUATION = "暴跌延续"
