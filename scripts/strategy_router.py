@@ -44,11 +44,11 @@ MODE_STRATEGY_MAP = {
     },
     MarketMode.SLOW_BULL: {
         "primary": ["slow_bull_long", "trend_long"],
-        "disabled": ["range_short", "scalp_ofi_short"],
+        "disabled": ["range_short", "scalp_ofi_short", "vwap_reversion_short", "fakeout_reversal_short"],
     },
     MarketMode.SLOW_BEAR: {
         "primary": ["trend_short", "slow_bear_short"],
-        "disabled": ["range_long", "vwap_reversion_long", "scalp_ofi_long"],
+        "disabled": ["range_long", "vwap_reversion_long", "scalp_ofi_long", "fakeout_reversal_long"],
     },
     MarketMode.BEAR_CASCADE: {
         "primary": ["trend_short", "slow_bear_short", "breakout_retest_short"],
@@ -56,7 +56,7 @@ MODE_STRATEGY_MAP = {
     },
     MarketMode.BULL_CASCADE: {
         "primary": ["trend_long", "breakout_retest_long"],
-        "disabled": ["range_short", "vwap_reversion_short", "scalp_ofi_short", "fakeout_reversal_short"],
+        "disabled": ["range_short", "vwap_reversion_short", "scalp_ofi_short", "fakeout_reversal_long"],
     },
     MarketMode.FAST_PUMP: {
         "primary": ["fakeout_reversal_short", "breakout_retest_long"],
