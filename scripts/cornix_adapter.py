@@ -46,26 +46,26 @@ def send_cornix(signal: dict, telegram_config: dict) -> bool:
     # 策略参数表
     if "剥头皮" in pattern or "scalp" in pattern.lower():
         lev = 30 if score >= 75 else (25 if score >= 60 else 20)
-        tp1_pct = 0.45 if is_eth else 0.40
-        sl_pct = 0.25 if is_eth else 0.20
+        tp1_pct = 0.60 if is_eth else 0.55
+        sl_pct = 0.30 if is_eth else 0.25
         tp_count = 1; trail_type = "Breakeven"
     elif "震荡" in pattern or "range" in pattern.lower():
-        lev = 20 if is_eth else 25
-        tp1_pct = 0.50 if is_eth else 0.40
-        sl_pct = 0.35 if is_eth else 0.30
+        lev = 25 if is_eth else 30
+        tp1_pct = 0.65 if is_eth else 0.55
+        sl_pct = 0.40 if is_eth else 0.35
         tp_count = 2; trail_type = "Breakeven"
     elif "趋势" in pattern or "trend" in pattern.lower():
-        lev = 20 if score >= 75 else 15
-        tp1_pct = 0.65 if is_eth else 0.55
-        sl_pct = 0.45 if is_eth else 0.35
+        lev = 25 if score >= 80 else 20
+        tp1_pct = 0.85 if is_eth else 0.75
+        sl_pct = 0.50 if is_eth else 0.40
         tp_count = 1; trail_type = "Percent Below Highest"
     elif "突破" in pattern or "breakout" in pattern.lower():
-        lev = 20
-        tp1_pct = 0.60 if is_eth else 0.50
-        sl_pct = 0.40 if is_eth else 0.30
+        lev = 25
+        tp1_pct = 0.75 if is_eth else 0.70
+        sl_pct = 0.45 if is_eth else 0.35
         tp_count = 1; trail_type = "Percent Below Highest"
     else:
-        lev = 25; tp1_pct = 0.45; sl_pct = 0.25; tp_count = 1; trail_type = "Breakeven"
+        lev = 28; tp1_pct = 0.60; sl_pct = 0.30; tp_count = 1; trail_type = "Breakeven"
 
     lev = min(lev, signal.get("leverage", 25))
     fmt = _fmt_price_cornix

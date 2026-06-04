@@ -33,8 +33,8 @@ DEFAULT_RISK_CONFIG = {
     "max_total_risk_pct": 2.0,        # 总风险敞口 ≤ 2%
     "min_liquidation_distance_pct": 1.0,   # 强平距离绝对下限1.0%（动态=SL×3）
     "min_liquidation_sl_multiplier": 3.0,  # 强平距离 ≥ SL距离 × 3
-    "leverage_cap_normal": 20,        # A级≤20x        # 普通信号 ≤ 15x
-    "leverage_cap_strong": 30,        # S级≥85分→30x        # 强信号(A+级) ≤ 25x
+    "leverage_cap_normal": 25,        # A级≤25x
+    "leverage_cap_strong": 30,        # S级≥85分→30x
     "min_strong_score": 85,            # 30x门槛提升到85分           # 25x 需要的最低评分
     "max_spread_scalp_pct": 0.02,     # 剥头皮最大价差 0.02%
     "max_spread_range_pct": 0.03,     # 震荡最大价差 0.03%
