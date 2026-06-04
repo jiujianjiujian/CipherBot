@@ -31,6 +31,9 @@ class MarketContext:
         self.liquidity_score = 100     # v5: 流动性评分 0-100，低=<30
         self.dump_exhaustion_score = 0 # v5: 暴跌衰竭反弹评分
         self.bounce_detected = False   # v5: 是否检测到低位反弹
+        self.wick_detected = False     # v5: 插针检测
+        self.wick_ratio = 0            # v5: 影线比
+        self.pump_exhaustion_score = 0 # v5: 暴涨衰竭评分
 
     def __repr__(self):
         return (f"MarketContext(derisk={self.derisk}, factor={self.derisk_factor:.2f}, "
@@ -243,6 +246,24 @@ def evaluate_market_context(klines_1h: Optional[List[dict]],
         if _uw_ratio >= 0.45: _ps += 15
         if _v15[-1] > sum(_v15[:-1]) / max(len(_v15)-1, 1) * 1.8: _ps += 15
         ctx.pump_exhaustion_score = min(100, _ps)
+
+    # ─── 9. 插针检测（异常影线识别）───
+    if klines_1h and len(klines_1h) >= 3:
+        _last = klines_1h[-1]
+        _prev = klines_1h[-2]
+        _body = abs(_last["close"] - _last["open"])
+        _upper = _last["high"] - max(_last["close"], _last["open"])
+        _lower = min(_last["close"], _last["open"]) - _last["low"]
+        _max_wick = max(_upper, _lower)
+        if _body > 0:
+            ctx.wick_ratio = _max_wick / _body
+            ctx.wick_detected = ctx.wick_ratio >= 3.0  # 影线≥3倍实体=插针
+        # 插针暴跌：长下影+大实体阴线+放量
+        _prev_body = abs(_prev["close"] - _prev["open"])
+        if _lower > _body * 2 and _last["close"] < _last["open"] and _last["volume"] > _prev.get("volume", 1) * 1.5:
+            ctx.wick_flash_crash = True
+        else:
+            ctx.wick_flash_crash = False
 
     return ctx
 
