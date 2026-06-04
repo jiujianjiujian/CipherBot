@@ -597,6 +597,15 @@ def find_trading_signal(price: float, ticker_24h: dict,
     if not all([price, ticker_24h, klines_15m, klines_1h, klines_4h]):
         return None, {}
 
+    # v5: 异常行情保护检查
+    if market_context:
+        if market_context.liquidation_cascade:
+            logger.info("  清算瀑布行情 跳过交易")
+            return None, {}
+        if market_context.thin_liquidity:
+            logger.info("  周末低流动性 跳过交易")
+            return None, {}
+
     closes_15m = [k["close"] for k in klines_15m]
     closes_1h = [k["close"] for k in klines_1h]
     closes_4h = [k["close"] for k in klines_4h]
