@@ -1022,6 +1022,22 @@ def run_scan():
     # v5: 初始化引擎
     risk_engine = RiskEngine()
     pos_machine = PositionStateMachine()
+    # v5: 自动复利 — 从Binance读取真实余额更新capital_base
+    try:
+        from binance_account import get_account_info
+        from config import BINANCE
+        _info = get_account_info(BINANCE.get("api_key",""), BINANCE.get("api_secret",""))
+        if _info:
+            _wallet = float(_info.get("total_wallet", 0))
+            if _wallet > 10:
+                _old = risk_engine.config.get("capital_base", 1000)
+                risk_engine.config["capital_base"] = int(_wallet)
+                _change = (_wallet - _old) / _old * 100 if _old > 0 else 0
+                if abs(_change) > 1:
+                    logger.info(f"  自动复利: ${_old:.0f} → ${_wallet:.0f} ({_change:+.1f}%)")
+    except:
+        pass
+
     risk_passed, risk_violations = risk_engine.check_all({})
     logger.info(f"风控状态: {'✅' if risk_passed else '⚠️'} 日盈亏={risk_engine.state['daily_pnl']:.1f}% | "
                 f"连亏={risk_engine.state['consecutive_losses']} | "
@@ -1371,6 +1387,13 @@ def run_fast_scan():
     sig["leverage"] = sig.get("leverage", 25)
     # 风控检查
     risk_engine = RiskEngine()
+    try:
+        from binance_account import get_account_info
+        from config import BINANCE
+        _info = get_account_info(BINANCE.get("api_key",""), BINANCE.get("api_secret",""))
+        if _info and float(_info.get("total_wallet", 0)) > 10:
+            risk_engine.config["capital_base"] = int(float(_info["total_wallet"]))
+    except: pass
     risk_passed, _ = risk_engine.check_all({})
     if not risk_passed:
         return
