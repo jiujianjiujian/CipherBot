@@ -959,6 +959,7 @@ def run_scan():
     # v5: OI/资金费率分析
     btc_contract = get_contract_data("BTCUSDT")
     market_ctx = evaluate_market_context(btc_k1h, btc_k4h, oi_data=btc_contract)
+    regime_mgr = RegimeTransitionManager()
     regime = classify_regime(btc_k4h, btc_k1h)
     actual_regime, regime_changed = regime_mgr.update(regime.value)
     regime_label = get_regime_params(regime).get("label", "?")
@@ -986,7 +987,6 @@ def run_scan():
         elif v['current_position'] == 'below_va': vrvp_str += "📉"
         logger.info(f"  VRVP: POC=${v['poc']} 价值区=${v['va_low']}-${v['va_high']} {describe_vrvp(btc_vrvp).split('|')[-1]}")
 
-    regime_mgr = RegimeTransitionManager()
 
     macro_ctx = MacroContext().evaluate()
     macro_str = f" | 恐慌{macro_ctx.fear_greed}"
