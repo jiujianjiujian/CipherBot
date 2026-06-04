@@ -816,6 +816,10 @@ def find_trading_signal(price: float, ticker_24h: dict,
 
     # v5: 方向过滤 — 暴跌衰竭反弹三档判断（if/elif防重叠）
     # 核心规则: 方向过滤可以临时放宽, 风控绝不放宽
+    _pump_ex = market_context.pump_exhaustion_score if market_context else 0
+    _allow_short = False
+    if _pump_ex >= 70:
+        _allow_short = True
     _ex = market_context.dump_exhaustion_score if market_context else 0
     _bn = market_context.bounce_detected if market_context else False
     _allow_long = False
